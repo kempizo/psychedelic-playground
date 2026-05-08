@@ -155,6 +155,7 @@ export function useThreeScene(canvasRef) {
     let lastHi = 0
     let lastBass = 0
     let lastBassSpawn = -999
+    let blobBurstPending = 0
     const clock = new THREE.Clock()
 
     // ── Pulse manager (render-loop-local, not in Zustand) ─────────────────────
@@ -199,6 +200,33 @@ export function useThreeScene(canvasRef) {
       p.alive = true
       p.collidedWith = new Set()
       p.birthTime = clock.getElapsedTime()
+    }
+
+    const spawnParticle = (px, py, vx, vy, life) => {
+      for (let i = 0; i < MAX_PARTICLES; i++) {
+        if (ages[i] < lives[i]) continue
+        positions[i * 3]     = px
+        positions[i * 3 + 1] = py
+        positions[i * 3 + 2] = 0
+        ages[i]  = 0
+        lives[i] = life
+        // Nearest active pulse ring within 0.15 NDC boosts velocity outward
+        for (let k = 0; k < MAX_PULSES; k++) {
+          const pk = pulses[k]
+          if (!pk.alive) continue
+          const dx = px - pk.origin.x, dy = py - pk.origin.y
+          const d  = Math.sqrt(dx * dx + dy * dy)
+          if (Math.abs(d - pk.radius) < 0.15) {
+            const n = d || 1
+            vx += (dx / n) * pk.energy * 0.006
+            vy += (dy / n) * pk.energy * 0.006
+            break
+          }
+        }
+        velocities[i].x = vx
+        velocities[i].y = vy
+        break
+      }
     }
 
     const onMouseDown = (e) => {
@@ -252,6 +280,19 @@ export function useThreeScene(canvasRef) {
             mainUniforms.uColorSpike.value      = Math.min(1.0, mainUniforms.uColorSpike.value      + 0.4)
             mainUniforms.uDistortionSpike.value = Math.min(1.0, mainUniforms.uDistortionSpike.value + 0.5)
           }
+        }
+      }
+
+      // Pulse-blob collision detection (blob ≈ sphere at origin, NDC radius 0.35)
+      for (let i = 0; i < MAX_PULSES; i++) {
+        const pi = pulses[i]
+        if (!pi.alive || pi.collidedWith.has(-1)) continue
+        const sep = Math.sqrt(pi.origin.x * pi.origin.x + pi.origin.y * pi.origin.y)
+        if (Math.abs(pi.radius - 0.35) < 0.12 && sep < 0.5) {
+          pi.collidedWith.add(-1)
+          blobBurstPending += 8 + Math.floor(Math.random() * 5)
+          mainUniforms.uColorSpike.value      = Math.min(1.0, mainUniforms.uColorSpike.value      + 0.3)
+          mainUniforms.uDistortionSpike.value = Math.min(1.0, mainUniforms.uDistortionSpike.value + 0.6)
         }
       }
 
@@ -339,22 +380,34 @@ export function useThreeScene(canvasRef) {
       if (hiVal > lastHi * 0.85 && hiVal > 0.15) {
         const spawns = Math.floor(spawnRate)
         for (let s = 0; s < spawns; s++) {
-          // Find a dead particle
-          for (let i = 0; i < MAX_PARTICLES; i++) {
-            if (ages[i] >= lives[i]) {
-              positions[i * 3]     = Math.random() * 2 - 1
-              positions[i * 3 + 1] = Math.random() * 2 - 1
-              positions[i * 3 + 2] = 0
-              ages[i]  = 0
-              lives[i] = 1.5 + Math.random() * 1.5
-              velocities[i].x = (Math.random() - 0.5) * 0.004
-              velocities[i].y = (Math.random() - 0.5) * 0.004 + 0.001
-              break
-            }
-          }
+          spawnParticle(
+            Math.random() * 2 - 1,
+            Math.random() * 2 - 1,
+            (Math.random() - 0.5) * 0.004,
+            (Math.random() - 0.5) * 0.004 + 0.001,
+            1.5 + Math.random() * 1.5,
+          )
         }
       }
       lastHi = hiVal
+
+      // Blob-collision burst: particles ejected radially from blob surface
+      if (blobBurstPending > 0) {
+        const count = blobBurstPending
+        blobBurstPending = 0
+        for (let s = 0; s < count; s++) {
+          const angle = Math.random() * Math.PI * 2
+          const r     = 0.30 + Math.random() * 0.10
+          const spd   = 0.005 + Math.random() * 0.005
+          spawnParticle(
+            Math.cos(angle) * r,
+            Math.sin(angle) * r,
+            Math.cos(angle) * spd,
+            Math.sin(angle) * spd,
+            1.0 + Math.random() * 1.0,
+          )
+        }
+      }
 
       // Update live particles (fixed timestep)
       for (let i = 0; i < MAX_PARTICLES; i++) {
