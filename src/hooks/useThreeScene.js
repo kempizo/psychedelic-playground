@@ -133,22 +133,34 @@ export function useThreeScene(canvasRef) {
     let lastHi = 0
     const clock = new THREE.Clock()
 
+    // Smoothed control values — lerped toward the store each frame so slider
+    // changes feel like influencing a system rather than snapping instantly.
+    const { speed: s0, intensity: i0, colorShift: c0, chaos: ch0 } = useStore.getState()
+    const smoothed = { speed: s0, intensity: i0, colorShift: c0, chaos: ch0 }
+    const LERP = 0.08
+
     const tick = () => {
       rafId = requestAnimationFrame(tick)
       const elapsed = clock.getElapsedTime()
       const store = useStore.getState()
       const { audioData, speed, intensity, colorShift, chaos, mode } = store
 
+      // Lerp controls toward store targets
+      smoothed.speed      += (speed      - smoothed.speed)      * LERP
+      smoothed.intensity  += (intensity  - smoothed.intensity)  * LERP
+      smoothed.colorShift += (colorShift - smoothed.colorShift) * LERP
+      smoothed.chaos      += (chaos      - smoothed.chaos)      * LERP
+
       // Update main uniforms
       mainUniforms.uTime.value       = elapsed
-      mainUniforms.uBass.value       = audioData.bass * intensity
-      mainUniforms.uMid.value        = audioData.mid  * intensity
-      mainUniforms.uHi.value         = audioData.hi   * intensity
-      mainUniforms.uSub.value        = audioData.sub  * intensity
-      mainUniforms.uSpeed.value      = speed
-      mainUniforms.uIntensity.value  = intensity
-      mainUniforms.uColorShift.value = colorShift
-      mainUniforms.uChaos.value      = chaos
+      mainUniforms.uBass.value       = audioData.bass * smoothed.intensity
+      mainUniforms.uMid.value        = audioData.mid  * smoothed.intensity
+      mainUniforms.uHi.value         = audioData.hi   * smoothed.intensity
+      mainUniforms.uSub.value        = audioData.sub  * smoothed.intensity
+      mainUniforms.uSpeed.value      = smoothed.speed
+      mainUniforms.uIntensity.value  = smoothed.intensity
+      mainUniforms.uColorShift.value = smoothed.colorShift
+      mainUniforms.uChaos.value      = smoothed.chaos
       mainUniforms.uMode.value       = mode
 
       // Pass 1: main shader → rtA
@@ -174,7 +186,7 @@ export function useThreeScene(canvasRef) {
       renderer.render(finalScene, camera)
 
       // Particle spawn on treble
-      const hiVal = audioData.hi * intensity
+      const hiVal = audioData.hi * smoothed.intensity
       const spawnRate = hiVal * 4
       if (hiVal > lastHi * 0.85 && hiVal > 0.15) {
         const spawns = Math.floor(spawnRate)
