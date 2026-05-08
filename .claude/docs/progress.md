@@ -1,6 +1,6 @@
 # Psychedelic Playground — Project Progress
 
-## Status: MVP feature-complete, shader fix applied
+## Status: Core bugs resolved, audio playback working, pause button pending
 
 ---
 
@@ -35,16 +35,23 @@
 - [x] Zustand store with `setControl`, `setAudioData`, `setAudioSource`, `setIsPlaying`
 - [x] URL save/share: 5 controls serialized to query params via `history.replaceState`
 - [x] Share button copies URL to clipboard
+- [x] "Change source" button in ControlPanel to switch between mic and file without page reload
+
+### Bug Fixes (session 2)
+- [x] **StrictMode removed** — React StrictMode double-invokes `useEffect` in dev, destroying the WebGL context on cleanup; canvas can only hold one context per lifetime
+- [x] **WebGL feedback loop resolved** — Added third independent `WebGLRenderTarget` (rtC); trailRead/trailWrite now ping-pong between rtB and rtC so Pass 2 never reads and writes the same texture simultaneously; texture uniforms explicitly nulled between passes to prevent Three.js binding cache from carrying stale references
+- [x] **`history.replaceState` rate limit fixed** — Added `lastUrl` cache in `useURLState`; `replaceState` only fires when serialized URL actually changes, not on every 60fps audio store update
+- [x] **File audio silent playback fixed** — `connectSource()` in `analyser.js` was only routing to the `AnalyserNode`; added optional `toSpeakers` flag that also connects to `ctx.destination`; file audio passes `true`, mic does not (prevents feedback)
 
 ---
 
 ## What's Next
 
 ### High Priority
+- [ ] **Pause/resume button** — needed on both the mic and upload audio interfaces; mic should mute analysis (not stop stream), file audio should pause/resume `AudioBufferSourceNode` playback and also pause the visual loop
 - [ ] **Cross-browser test** — Safari requires `audioContext.resume()` inside a click; test mic + file on Safari 17+
 - [ ] **Mobile check** — reduce `fftSize` to 1024 on small screens, verify touch controls work
 - [ ] **Error states** — mic permission denied banner, file format unsupported warning
-- [ ] **GitHub remote** — push to GitHub (`gh repo create` or manual remote setup)
 
 ### Visual Polish
 - [ ] **Mode 1 (Radial) tuning** — the polar mode is functional but visually weaker than Mode 0; FBM parameters could be tweaked specifically for it
@@ -71,6 +78,10 @@
 | Vertex shader missing attribute declarations | Fixed | `psychedelic.vert` now declares `attribute vec3 position; attribute vec2 uv;` |
 | `dt` double-getDelta bug | Fixed | Particle age update uses hardcoded `1/60` |
 | Particle x-position out of camera bounds | Fixed | Removed aspect multiplier from spawn position |
+| WebGL feedback loop (read+write same texture) | Fixed | Third independent `WebGLRenderTarget` (rtC) added; ping-pong between rtB/rtC |
+| `history.replaceState` SecurityError (>100 calls/10s) | Fixed | `lastUrl` cache prevents calling `replaceState` on 60fps audio updates |
+| File audio silent (no speaker output) | Fixed | `connectSource(source, true)` now also connects to `ctx.destination` |
+| React StrictMode double WebGL context destruction | Fixed | Removed `<StrictMode>` from `main.jsx` |
 
 ---
 
@@ -82,10 +93,10 @@ Audio → useAudioAnalyser → Zustand store (getState 60fps)
                         useThreeScene tick()
                                 ↓
           Pass 1: psychedelic.frag → rtA
-          Pass 2: trail.frag (rtA + rtB × 0.82) → rtB
-          Pass 3: rtB → screen
+          Pass 2: trail.frag (rtA + trailRead × 0.82) → trailWrite
+          Pass 3: trailWrite → screen
           Particles: cpu update → Points render (additive, no depth)
-          Swap rtA/rtB
+          Swap trailRead/trailWrite (rtB ↔ rtC)
 ```
 
 ## File Map

@@ -20,9 +20,10 @@ export function createAnalyser(fftSize = 2048) {
   return { ctx, analyser: analyserNode }
 }
 
-export function connectSource(sourceNode) {
+export function connectSource(sourceNode, toSpeakers = false) {
   if (!analyserNode) throw new Error('Call createAnalyser first')
   sourceNode.connect(analyserNode)
+  if (toSpeakers) sourceNode.connect(audioCtx.destination)
 }
 
 export function getAnalyser() {

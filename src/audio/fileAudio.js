@@ -14,7 +14,7 @@ export async function connectFile(file) {
   activeSource = ctx.createBufferSource()
   activeSource.buffer = audioBuffer
   activeSource.loop = true
-  connectSource(activeSource)
+  connectSource(activeSource, true)
   activeSource.start(0)
   return activeSource
 }

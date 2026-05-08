@@ -22,7 +22,17 @@ export function useThreeScene(canvasRef) {
 
     const renderer = createRenderer(canvasRef.current)
     const { scene, camera } = createScene()
+    // Three independent render targets — no shared textures.
+    // rtA: fresh main shader output each frame.
+    // rtB + rtC: ping-pong for trail accumulation so Pass 2 never reads and
+    // writes the same target (WebGL feedback loop).
     const [rtA, rtB] = createPingPongTargets()
+    const rtC = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+    })
 
     // ── Main shader material ──────────────────────────────────────────────────
     const mainUniforms = {
@@ -108,15 +118,18 @@ export function useThreeScene(canvasRef) {
 
     // ── Resize handler ────────────────────────────────────────────────────────
     const onResize = () => {
-      resizeRenderer(renderer, [rtA, rtB])
+      resizeRenderer(renderer, [rtA, rtB, rtC])
       mainUniforms.uResolution.value.set(window.innerWidth, window.innerHeight)
     }
     window.addEventListener('resize', onResize)
 
     // ── Render loop ───────────────────────────────────────────────────────────
     let rafId
-    let current = rtA
-    let prev = rtB
+    // rtA = fresh main shader output each frame
+    // trailRead / trailWrite ping-pong between rtB and rtC so Pass 2 never
+    // reads and writes the same target (WebGL feedback loop).
+    let trailRead  = rtB
+    let trailWrite = rtC
     let lastHi = 0
     const clock = new THREE.Clock()
 
@@ -138,18 +151,25 @@ export function useThreeScene(canvasRef) {
       mainUniforms.uChaos.value      = chaos
       mainUniforms.uMode.value       = mode
 
-      // Pass 1: render main shader to current render target
-      renderer.setRenderTarget(current)
+      // Pass 1: main shader → rtA
+      // Clear finalUniforms so Three.js doesn't keep trailWrite's texture bound
+      // while we switch framebuffers — stale bindings trigger the feedback loop.
+      finalUniforms.uCurrent.value = null
+      renderer.setRenderTarget(rtA)
       renderer.render(scene, camera)
 
-      // Pass 2: trail blend (current + prev) → prev target
-      trailUniforms.uCurrent.value = current.texture
-      trailUniforms.uPrev.value    = prev.texture
-      renderer.setRenderTarget(prev)
+      // Pass 2: blend(rtA, trailRead) → trailWrite
+      // trailRead and trailWrite are always different targets (ping-pong rtB/rtC).
+      trailUniforms.uCurrent.value = rtA.texture
+      trailUniforms.uPrev.value    = trailRead.texture
+      renderer.setRenderTarget(trailWrite)
       renderer.render(trailScene, camera)
 
-      // Pass 3: draw blended result to screen
-      finalUniforms.uCurrent.value = prev.texture
+      // Pass 3: trailWrite → screen
+      // Clear trail uniforms before binding trailWrite as a sampler.
+      trailUniforms.uCurrent.value = null
+      trailUniforms.uPrev.value    = null
+      finalUniforms.uCurrent.value = trailWrite.texture
       renderer.setRenderTarget(null)
       renderer.render(finalScene, camera)
 
@@ -191,8 +211,8 @@ export function useThreeScene(canvasRef) {
       renderer.render(particleScene, particleCamera)
       renderer.autoClear = true
 
-      // Ping-pong swap
-      const tmp = current; current = prev; prev = tmp
+      // Ping-pong swap: trailWrite becomes trailRead next frame
+      const tmp = trailRead; trailRead = trailWrite; trailWrite = tmp
     }
 
     rafId = requestAnimationFrame(tick)
@@ -208,6 +228,7 @@ export function useThreeScene(canvasRef) {
       pGeo.dispose()
       rtA.dispose()
       rtB.dispose()
+      rtC.dispose()
     }
 
     return cleanupRef.current

@@ -15,12 +15,18 @@ export function useURLState() {
     mounted.current = true
   }, [])
 
-  // Update URL when controls change (debounced)
+  // Update URL when controls change — skip if nothing serializable changed.
+  // Without this guard, audio data updates (60fps) would hit the browser's
+  // replaceState rate limit (100 calls / 10s) and throw a SecurityError.
   useEffect(() => {
     if (!mounted.current) return
+    let lastUrl = ''
     const unsub = useStore.subscribe((state) => {
       const url = serialize(state)
-      window.history.replaceState(null, '', url)
+      if (url !== lastUrl) {
+        lastUrl = url
+        window.history.replaceState(null, '', url)
+      }
     })
     return unsub
   }, [])

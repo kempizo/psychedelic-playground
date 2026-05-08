@@ -7,7 +7,7 @@ const CONTROLS = [
   { key: 'chaos',      label: 'Chaos',       min: 0,    max: 1,   step: 0.01 },
 ]
 
-export default function ControlPanel() {
+export default function ControlPanel({ onReset }) {
   const { speed, intensity, colorShift, chaos, mode, setControl } = useStore()
 
   const values = { speed, intensity, colorShift, chaos }
@@ -18,6 +18,21 @@ export default function ControlPanel() {
         className="pointer-events-auto w-full max-w-xl rounded-2xl px-6 py-4 flex flex-col gap-3"
         style={{ background: 'rgba(5,5,5,0.75)', backdropFilter: 'blur(12px)', border: '1px solid rgba(0,200,170,0.15)' }}
       >
+        {onReset && (
+          <div className="flex justify-end -mb-1">
+            <button
+              onClick={onReset}
+              className="text-xs font-mono px-3 py-1 rounded-full transition-all"
+              style={{
+                background: 'transparent',
+                border: '1px solid rgba(0,200,160,0.25)',
+                color: 'rgba(0,220,180,0.6)',
+              }}
+            >
+              Change source
+            </button>
+          </div>
+        )}
         {CONTROLS.map(({ key, label, min, max, step }) => (
           <div key={key} className="flex items-center gap-4">
             <span className="text-xs font-mono w-20 shrink-0" style={{ color: 'rgba(0,220,180,0.75)' }}>
