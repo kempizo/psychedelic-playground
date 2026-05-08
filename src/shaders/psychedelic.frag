@@ -16,6 +16,7 @@ uniform float uMouseVel;
 uniform vec4  uPulses[8];
 uniform float uColorSpike;
 uniform float uDistortionSpike;
+uniform vec2  uMouseDir;
 
 varying vec2 vUv;
 
@@ -114,6 +115,7 @@ void main() {
   }
   pulseGlow = clamp(pulseGlow, 0.0, 1.0);
   sUV += pulseWarp;
+  sUV += uMouseDir * uMouseVel * 0.06;
 
   // ── Virtual camera ─────────────────────────────────────────────────────────
   vec3 ro, rd;

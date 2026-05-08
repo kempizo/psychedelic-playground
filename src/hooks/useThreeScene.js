@@ -57,6 +57,7 @@ export function useThreeScene(canvasRef) {
       ]},
       uColorSpike:      { value: 0 },
       uDistortionSpike: { value: 0 },
+      uMouseDir:        { value: new THREE.Vector2(0, 0) },
     }
     const mainMat = new THREE.RawShaderMaterial({
       vertexShader: vertSrc,
@@ -137,6 +138,7 @@ export function useThreeScene(canvasRef) {
     const rawMouse      = new THREE.Vector2(0, 0)
     const prevRawMouse  = new THREE.Vector2(0, 0)
     const smoothedMouse = new THREE.Vector2(0, 0)
+    const mouseDirSmooth = new THREE.Vector2(0, 0)
     let mouseVel = 0
 
     const onMouseMove = (e) => {
@@ -156,6 +158,9 @@ export function useThreeScene(canvasRef) {
     let lastBass = 0
     let lastBassSpawn = -999
     let blobBurstPending = 0
+    let isHolding = false
+    let holdStartTime = 0
+    let lastHoldSpawn = -999
     const clock = new THREE.Clock()
 
     // ── Pulse manager (render-loop-local, not in Zustand) ─────────────────────
@@ -233,8 +238,11 @@ export function useThreeScene(canvasRef) {
       const x = (e.clientX / window.innerWidth)  * 2 - 1
       const y = -((e.clientY / window.innerHeight) * 2 - 1)
       spawnPulse(x, y, 0.85, 0.7, 'click', 0)
+      isHolding = true
+      holdStartTime = clock.getElapsedTime()
+      lastHoldSpawn = holdStartTime
     }
-    const onMouseUp = () => {}
+    const onMouseUp = () => { isHolding = false }
     window.addEventListener('mousedown', onMouseDown)
     window.addEventListener('mouseup', onMouseUp)
 
@@ -310,16 +318,31 @@ export function useThreeScene(canvasRef) {
       if (curBass > lastBass * 1.3 && curBass > 0.35 && (elapsed - lastBassSpawn) > 0.3) {
         const energy = Math.min(curBass * smoothed.intensity, 0.9)
         const spd    = 0.6 + curBass * 0.4
-        const jx     = (Math.random() - 0.5) * 0.1
-        const jy     = (Math.random() - 0.5) * 0.1
+        const jx = (Math.random() - 0.5) * 0.1 + mouseDirSmooth.x * 0.08
+        const jy = (Math.random() - 0.5) * 0.1 + mouseDirSmooth.y * 0.08
         spawnPulse(jx, jy, energy, spd, 'bass', 0)
         lastBassSpawn = elapsed
       }
       lastBass = curBass
 
+      // Hold injection: emit every 250ms after 150ms threshold
+      if (isHolding && (elapsed - holdStartTime) > 0.15 && (elapsed - lastHoldSpawn) > 0.25) {
+        spawnPulse(rawMouse.x, rawMouse.y, 0.45, 0.7, 'hold', 0)
+        lastHoldSpawn = elapsed
+      }
+
       // Mouse velocity: accumulate movement, decay 0.92/frame
       const mouseDelta = rawMouse.distanceTo(prevRawMouse)
       mouseVel = Math.min(mouseVel + mouseDelta, 1.0) * 0.92
+      // Smoothed direction: only update when mouse is actually moving
+      if (mouseDelta > 0.0001) {
+        const dl = mouseDelta
+        mouseDirSmooth.x += ((rawMouse.x - prevRawMouse.x) / dl - mouseDirSmooth.x) * 0.1
+        mouseDirSmooth.y += ((rawMouse.y - prevRawMouse.y) / dl - mouseDirSmooth.y) * 0.1
+        const sl = Math.sqrt(mouseDirSmooth.x * mouseDirSmooth.x + mouseDirSmooth.y * mouseDirSmooth.y) || 1
+        mouseDirSmooth.x /= sl
+        mouseDirSmooth.y /= sl
+      }
       prevRawMouse.copy(rawMouse)
       smoothedMouse.x += (rawMouse.x - smoothedMouse.x) * 0.04
       smoothedMouse.y += (rawMouse.y - smoothedMouse.y) * 0.04
@@ -338,6 +361,7 @@ export function useThreeScene(canvasRef) {
       mainUniforms.uMode.value       = mode
       mainUniforms.uMouse.value.set(smoothedMouse.x * aspect, smoothedMouse.y)
       mainUniforms.uMouseVel.value   = mouseVel
+      mainUniforms.uMouseDir.value.set(mouseDirSmooth.x, mouseDirSmooth.y)
       for (let i = 0; i < MAX_PULSES; i++) {
         const p = pulses[i]
         if (p.alive) {
