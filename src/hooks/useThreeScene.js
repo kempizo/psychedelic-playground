@@ -153,6 +153,8 @@ export function useThreeScene(canvasRef) {
     let trailRead  = rtB
     let trailWrite = rtC
     let lastHi = 0
+    let lastBass = 0
+    let lastBassSpawn = -999
     const clock = new THREE.Clock()
 
     // ── Pulse manager (render-loop-local, not in Zustand) ─────────────────────
@@ -224,8 +226,33 @@ export function useThreeScene(canvasRef) {
         const p = pulses[i]
         if (!p.alive) continue
         p.radius += p.speed * dt
-        p.energy *= 0.979
+        p.energy *= p.generation >= 3 ? 0.958 : 0.979
         if (p.energy < 0.01 || p.radius > 2.5) p.alive = false
+      }
+
+      // Pulse-pulse collision detection (28 unique pairs max)
+      for (let i = 0; i < MAX_PULSES; i++) {
+        const pi = pulses[i]
+        if (!pi.alive) continue
+        for (let j = i + 1; j < MAX_PULSES; j++) {
+          const pj = pulses[j]
+          if (!pj.alive) continue
+          if (pi.collidedWith.has(j) || pj.collidedWith.has(i)) continue
+          const sep = pi.origin.distanceTo(pj.origin)
+          if (Math.abs(pi.radius + pj.radius - sep) < 0.08) {
+            pi.collidedWith.add(j)
+            pj.collidedWith.add(i)
+            const chainEnergy = (pi.energy + pj.energy) * 0.5 * 0.65
+            const chainGen    = Math.max(pi.generation, pj.generation) + 1
+            if (chainEnergy > 0.15 && chainGen <= 3) {
+              const mx = (pi.origin.x + pj.origin.x) * 0.5
+              const my = (pi.origin.y + pj.origin.y) * 0.5
+              spawnPulse(mx, my, chainEnergy, (pi.speed + pj.speed) * 0.5 * 0.9, 'chain', chainGen)
+            }
+            mainUniforms.uColorSpike.value      = Math.min(1.0, mainUniforms.uColorSpike.value      + 0.4)
+            mainUniforms.uDistortionSpike.value = Math.min(1.0, mainUniforms.uDistortionSpike.value + 0.5)
+          }
+        }
       }
 
       const store = useStore.getState()
@@ -236,6 +263,18 @@ export function useThreeScene(canvasRef) {
       smoothed.intensity  += (intensity  - smoothed.intensity)  * LERP
       smoothed.colorShift += (colorShift - smoothed.colorShift) * LERP
       smoothed.chaos      += (chaos      - smoothed.chaos)      * LERP
+
+      // Bass auto-spawn: rising edge with 0.3s cooldown
+      const curBass = audioData.bass
+      if (curBass > lastBass * 1.3 && curBass > 0.35 && (elapsed - lastBassSpawn) > 0.3) {
+        const energy = Math.min(curBass * smoothed.intensity, 0.9)
+        const spd    = 0.6 + curBass * 0.4
+        const jx     = (Math.random() - 0.5) * 0.1
+        const jy     = (Math.random() - 0.5) * 0.1
+        spawnPulse(jx, jy, energy, spd, 'bass', 0)
+        lastBassSpawn = elapsed
+      }
+      lastBass = curBass
 
       // Mouse velocity: accumulate movement, decay 0.92/frame
       const mouseDelta = rawMouse.distanceTo(prevRawMouse)

@@ -153,7 +153,7 @@ void main() {
 
   for (int i = 0; i < 40; i++) {
     vec3  p = ro + rd * tRay;
-    float d = sdfBlob(p, t, uBass, uMid, uChaos);
+    float d = sdfBlob(p, t, uBass, uMid, uChaos) + pulseGlow * 0.03;
     minD = min(minD, abs(d));
     if (abs(d) < 0.006) { hitDist = tRay; break; }
     tRay += max(abs(d) * 0.55, 0.015);
