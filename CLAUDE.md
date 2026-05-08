@@ -99,6 +99,16 @@ src/
 
 User `Intensity` slider multiplies all bands before they hit the shader.
 
+## Known issues (open, not yet fixed)
+
+| # | File | Issue |
+|---|------|-------|
+| 1 | `src/shaders/psychedelic.frag` | **Palette red zone**: `tColor = f * 0.5 + 0.5` centers the distribution at `t ≈ 0.5` which maps to red/orange in the cosine palette. Idle shader shows warm tones instead of teal/green. Fix: change to `f * 0.4 + 0.72`. |
+| 2 | `src/hooks/useThreeScene.js` | **Touch events missing**: `uMouse`/`uMouseVel` only update on `mousemove` — mobile users get no distortion stirring. Fix: add `touchmove` handler mapping `touches[0]` to `rawMouse`. |
+| 3 | `src/hooks/useThreeScene.js` | **`THREE.Clock` deprecated**: console warning at startup. Should migrate to `THREE.Timer`. |
+| 4 | `src/audio/fileAudio.js:11,24` | **Lint errors**: two empty `catch {}` blocks trip `no-empty` rule. Add `// ignore` comment or `_e` param. |
+| 5 | `src/components/LandingScreen.jsx:14` | **`duration-600` Tailwind class**: not in the default scale (steps are 500/700). Fade transition may not apply. Use `duration-500` or inline style. |
+
 ## Plan
 
 The MVP plan that this codebase implements is at [.claude/plans/psychedelic-playground-mvp.md](.claude/plans/psychedelic-playground-mvp.md). Treat it as the spec.

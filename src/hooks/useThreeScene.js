@@ -47,6 +47,8 @@ export function useThreeScene(canvasRef) {
       uColorShift: { value: 0 },
       uChaos:      { value: 0.5 },
       uMode:       { value: 0 },
+      uMouse:      { value: new THREE.Vector2(0, 0) },
+      uMouseVel:   { value: 0 },
     }
     const mainMat = new THREE.RawShaderMaterial({
       vertexShader: vertSrc,
@@ -123,6 +125,18 @@ export function useThreeScene(canvasRef) {
     }
     window.addEventListener('resize', onResize)
 
+    // ── Mouse tracking ────────────────────────────────────────────────────────
+    const rawMouse      = new THREE.Vector2(0, 0)
+    const prevRawMouse  = new THREE.Vector2(0, 0)
+    const smoothedMouse = new THREE.Vector2(0, 0)
+    let mouseVel = 0
+
+    const onMouseMove = (e) => {
+      rawMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1
+      rawMouse.y = -((e.clientY / window.innerHeight) * 2 - 1)
+    }
+    window.addEventListener('mousemove', onMouseMove)
+
     // ── Render loop ───────────────────────────────────────────────────────────
     let rafId
     // rtA = fresh main shader output each frame
@@ -137,7 +151,7 @@ export function useThreeScene(canvasRef) {
     // changes feel like influencing a system rather than snapping instantly.
     const { speed: s0, intensity: i0, colorShift: c0, chaos: ch0 } = useStore.getState()
     const smoothed = { speed: s0, intensity: i0, colorShift: c0, chaos: ch0 }
-    const LERP = 0.08
+    const LERP = 0.05
 
     const tick = () => {
       rafId = requestAnimationFrame(tick)
@@ -151,6 +165,14 @@ export function useThreeScene(canvasRef) {
       smoothed.colorShift += (colorShift - smoothed.colorShift) * LERP
       smoothed.chaos      += (chaos      - smoothed.chaos)      * LERP
 
+      // Mouse velocity: accumulate movement, decay 0.92/frame
+      const mouseDelta = rawMouse.distanceTo(prevRawMouse)
+      mouseVel = Math.min(mouseVel + mouseDelta, 1.0) * 0.92
+      prevRawMouse.copy(rawMouse)
+      smoothedMouse.x += (rawMouse.x - smoothedMouse.x) * 0.04
+      smoothedMouse.y += (rawMouse.y - smoothedMouse.y) * 0.04
+      const aspect = window.innerWidth / window.innerHeight
+
       // Update main uniforms
       mainUniforms.uTime.value       = elapsed
       mainUniforms.uBass.value       = audioData.bass * smoothed.intensity
@@ -162,6 +184,11 @@ export function useThreeScene(canvasRef) {
       mainUniforms.uColorShift.value = smoothed.colorShift
       mainUniforms.uChaos.value      = smoothed.chaos
       mainUniforms.uMode.value       = mode
+      mainUniforms.uMouse.value.set(smoothedMouse.x * aspect, smoothedMouse.y)
+      mainUniforms.uMouseVel.value   = mouseVel
+
+      // Dynamic trail decay: quiet = 0.84 (more trail), bass hit = 0.80 (pulse flash)
+      trailUniforms.uDecay.value = Math.max(0.80, 0.84 - mainUniforms.uBass.value * 0.04)
 
       // Pass 1: main shader → rtA
       // Clear finalUniforms so Three.js doesn't keep trailWrite's texture bound
@@ -232,6 +259,7 @@ export function useThreeScene(canvasRef) {
     cleanupRef.current = () => {
       cancelAnimationFrame(rafId)
       window.removeEventListener('resize', onResize)
+      window.removeEventListener('mousemove', onMouseMove)
       renderer.dispose()
       mainMat.dispose()
       trailMat.dispose()

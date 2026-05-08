@@ -11,6 +11,8 @@ uniform float uIntensity;
 uniform float uColorShift;
 uniform float uChaos;
 uniform int   uMode;
+uniform vec2  uMouse;
+uniform float uMouseVel;
 
 varying vec2 vUv;
 
@@ -20,10 +22,11 @@ vec2 hash2(vec2 p) {
   return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
 }
 
+// Quintic smoothing (Perlin 2002) — smoother gradients than cubic.
 float noise(vec2 p) {
   vec2 i = floor(p);
   vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
   return mix(
     mix(dot(hash2(i + vec2(0,0)), f - vec2(0,0)),
         dot(hash2(i + vec2(1,0)), f - vec2(1,0)), u.x),
@@ -63,10 +66,14 @@ void main() {
   float aspect = uResolution.x / uResolution.y;
   vec2 p = (vUv * 2.0 - 1.0) * vec2(aspect, 1.0);
 
-  float t = uTime * uSpeed * 0.25;
+  // Separate time layers: slow organic base + bass-reactive push.
+  // t_base is 30% slower than before (0.175 vs 0.25).
+  // Bass shifts t_audio forward in time — kick feels like a pulse, not a spatial jump.
+  float t_base  = uTime * uSpeed * 0.175;
+  float t_audio = t_base + uBass * 0.3;
 
-  // Slow sub-bass camera drift
-  p += vec2(sin(uTime * 0.07), cos(uTime * 0.05)) * uSub * 0.12;
+  // Slower sub-bass drift (0.05 freq, 0.08 magnitude — was 0.07, 0.12)
+  p += vec2(sin(uTime * 0.05), cos(uTime * 0.05)) * uSub * 0.08;
 
   // Mode 1: polar coordinates
   if (uMode == 1) {
@@ -74,16 +81,23 @@ void main() {
     p = vec2(pol.x * 1.2, pol.y / 3.14159);
   }
 
-  // Domain warp — two layers (IQ technique)
-  float chaos = uChaos * 1.8 + 0.2;
+  // Domain warp — two layers (IQ technique).
+  // q uses t_base (slow organic), r uses t_audio (bass-reactive).
+  // chaos reaches 4.0 at max (was 2.0) for more dramatic fluid depth.
+  float chaos = uChaos * 3.8 + 0.2;
   vec2 q = vec2(
-    fbm(p + t),
-    fbm(p + vec2(1.7, 9.2) + t * 0.8)
+    fbm(p + t_base),
+    fbm(p + vec2(1.7, 9.2) + t_base * 0.8)
   );
   vec2 r = vec2(
-    fbm(p + chaos * q + vec2(1.7, 9.2) + uBass * 0.6),
-    fbm(p + chaos * q + vec2(8.3, 2.8) + uBass * 0.6)
+    fbm(p + chaos * q + vec2(1.7, 9.2) + t_audio),
+    fbm(p + chaos * q + vec2(8.3, 2.8) + t_audio * 0.9)
   );
+
+  // Mouse stirring: Gaussian falloff injects energy into the r warp layer.
+  // Adding to r (not q or p) avoids double-propagation through chaos * q.
+  float mouseFalloff = exp(-length(p - uMouse) * 2.5);
+  r += mouseFalloff * uMouseVel * 0.6;
 
   // Base field value — mid drives distortion strength
   float f = fbm(p + (1.0 + uMid * 2.5) * r);
