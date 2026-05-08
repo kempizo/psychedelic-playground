@@ -149,14 +149,18 @@ export function useThreeScene(canvasRef) {
     let mouseVel = 0
     let cursorHideTimer = null
 
-    const onMouseMove = (e) => {
-      rawMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1
-      rawMouse.y = -((e.clientY / window.innerHeight) * 2 - 1)
+    const resetCursorTimer = () => {
       clearTimeout(cursorHideTimer)
       if (canvasRef.current) canvasRef.current.style.cursor = ''
       cursorHideTimer = setTimeout(() => {
         if (!isHolding && canvasRef.current) canvasRef.current.style.cursor = 'none'
       }, 3000)
+    }
+
+    const onMouseMove = (e) => {
+      rawMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1
+      rawMouse.y = -((e.clientY / window.innerHeight) * 2 - 1)
+      resetCursorTimer()
     }
     window.addEventListener('mousemove', onMouseMove)
 
@@ -174,7 +178,7 @@ export function useThreeScene(canvasRef) {
     let isHolding = false
     let holdStartTime = 0
     let lastHoldSpawn = -999
-    const clock      = new THREE.Clock()
+    const timer      = new THREE.Timer()
     const controller = new BehavioralController()
 
     // ── Pulse manager (render-loop-local, not in Zustand) ─────────────────────
@@ -193,7 +197,6 @@ export function useThreeScene(canvasRef) {
       dirY: 0,
       typeIndex: 0,
     }))
-    let lastElapsed = 0
 
     const spawnPulse = (x, y, energy, speed, type, generation = 0) => {
       let slot = -1
@@ -221,7 +224,7 @@ export function useThreeScene(canvasRef) {
       p.generation = generation
       p.alive = true
       p.collidedWith = new Set()
-      p.birthTime = clock.getElapsedTime()
+      p.birthTime = timer.getElapsed()
       p.dirX = mouseDirSmooth.x
       p.dirY = mouseDirSmooth.y
       p.typeIndex = type === 'click' ? 0 : type === 'bass' ? 1 : type === 'hold' ? 2 : 3
@@ -259,7 +262,7 @@ export function useThreeScene(canvasRef) {
       const y = -((e.clientY / window.innerHeight) * 2 - 1)
       spawnPulse(x, y, 0.85, 0.7, 'click', 0)
       isHolding = true
-      holdStartTime = clock.getElapsedTime()
+      holdStartTime = timer.getElapsed()
       lastHoldSpawn = holdStartTime
       canvasRef.current.style.cursor = 'none'
     }
@@ -270,6 +273,24 @@ export function useThreeScene(canvasRef) {
     canvasRef.current.addEventListener('mousedown', onMouseDown)
     canvasRef.current.addEventListener('mouseup', onMouseUp)
 
+    const onTouchMove = (e) => {
+      e.preventDefault()
+      const t = e.touches[0]
+      const rect = canvasRef.current.getBoundingClientRect()
+      rawMouse.x = ((t.clientX - rect.left) / rect.width)  * 2 - 1
+      rawMouse.y = -((t.clientY - rect.top)  / rect.height) * 2 + 1
+      resetCursorTimer()
+    }
+    const onTouchStart = (e) => {
+      const t = e.touches[0]
+      const rect = canvasRef.current.getBoundingClientRect()
+      rawMouse.x = ((t.clientX - rect.left) / rect.width)  * 2 - 1
+      rawMouse.y = -((t.clientY - rect.top)  / rect.height) * 2 + 1
+      spawnPulse(rawMouse.x, rawMouse.y, 0.85, 0.7, 'click', 0)
+    }
+    canvasRef.current.addEventListener('touchmove', onTouchMove, { passive: false })
+    canvasRef.current.addEventListener('touchstart', onTouchStart)
+
     // Smoothed control values — lerped toward behavioral targets each frame.
     const { speed: s0, intensity: i0, colorShift: c0, chaos: ch0 } = useStore.getState()
     const smoothed = { speed: s0, intensity: i0, colorShift: c0, chaos: ch0, breakSpike: 0 }
@@ -279,9 +300,9 @@ export function useThreeScene(canvasRef) {
 
     const tick = () => {
       rafId = requestAnimationFrame(tick)
-      const elapsed = clock.getElapsedTime()
-      const dt = elapsed - lastElapsed
-      lastElapsed = elapsed
+      timer.update()
+      const elapsed = timer.getElapsed()
+      const dt = timer.getDelta()
 
       for (let i = 0; i < MAX_PULSES; i++) {
         const p = pulses[i]
@@ -391,12 +412,18 @@ export function useThreeScene(canvasRef) {
       smoothedMouse.y += (rawMouse.y - smoothedMouse.y) * 0.04
       const aspect = window.innerWidth / window.innerHeight
 
+      // Non-linear audio curves: quiet → subtle; peaks → strong reactions
+      const bassNL = Math.pow(Math.max(0, audioData.bass), 0.65) * 1.4
+      const midNL  = Math.pow(Math.max(0, audioData.mid),  0.80) * 1.2
+      const hiNL   = audioData.hi * audioData.hi * 2.5
+      const subNL  = Math.pow(Math.max(0, audioData.sub),  0.70) * 1.1
+
       // Update main uniforms
       mainUniforms.uTime.value       = elapsed
-      mainUniforms.uBass.value       = audioData.bass * smoothed.intensity
-      mainUniforms.uMid.value        = audioData.mid  * smoothed.intensity
-      mainUniforms.uHi.value         = audioData.hi   * smoothed.intensity
-      mainUniforms.uSub.value        = audioData.sub  * smoothed.intensity
+      mainUniforms.uBass.value       = bassNL * smoothed.intensity
+      mainUniforms.uMid.value        = midNL  * smoothed.intensity
+      mainUniforms.uHi.value         = hiNL   * smoothed.intensity
+      mainUniforms.uSub.value        = subNL  * smoothed.intensity
       mainUniforms.uSpeed.value      = smoothed.speed
       mainUniforms.uIntensity.value  = smoothed.intensity
       mainUniforms.uColorShift.value = smoothed.colorShift
@@ -422,6 +449,13 @@ export function useThreeScene(canvasRef) {
       mainUniforms.uDistortionSpike.value = Math.max(
         Math.max(0, mainUniforms.uDistortionSpike.value * 0.919),
         smoothed.breakSpike
+      )
+
+      // Combined bass+hi boost: kick + cymbal together trigger distortion pulses
+      const combinedBoost = bassNL * hiNL * smoothed.intensity * 2.5
+      mainUniforms.uDistortionSpike.value = Math.max(
+        mainUniforms.uDistortionSpike.value,
+        combinedBoost
       )
 
       // State-driven trail decay (behavioral) + mode + bass modulation
@@ -516,6 +550,8 @@ export function useThreeScene(canvasRef) {
       window.removeEventListener('mousemove', onMouseMove)
       canvasRef.current?.removeEventListener('mousedown', onMouseDown)
       canvasRef.current?.removeEventListener('mouseup', onMouseUp)
+      canvasRef.current?.removeEventListener('touchmove', onTouchMove)
+      canvasRef.current?.removeEventListener('touchstart', onTouchStart)
       renderer.dispose()
       mainMat.dispose()
       trailMat.dispose()

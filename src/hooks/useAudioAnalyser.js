@@ -8,6 +8,13 @@ export function useAudioAnalyser() {
   const smoothed = useRef({ sub: 0, bass: 0, mid: 0, hi: 0 })
 
   useEffect(() => {
+    // Fast attack, slow release — captures transients without jitter
+    function ema(prev, next, aAtk, aRel) {
+      return next > prev
+        ? prev + (next - prev) * aAtk
+        : prev + (next - prev) * aRel
+    }
+
     const loop = () => {
       const analyser = getAnalyser()
       if (analyser) {
@@ -15,12 +22,11 @@ export function useAudioAnalyser() {
         analyser.getByteFrequencyData(data)
         const raw = extractBands(data)
 
-        // Exponential smoothing per band
         const s = smoothed.current
-        s.sub  = s.sub  * 0.82 + raw.sub  * 0.18
-        s.bass = s.bass * 0.78 + raw.bass * 0.22
-        s.mid  = s.mid  * 0.80 + raw.mid  * 0.20
-        s.hi   = s.hi   * 0.75 + raw.hi   * 0.25
+        s.sub  = ema(s.sub,  raw.sub,  0.55, 0.90)
+        s.bass = ema(s.bass, raw.bass, 0.60, 0.88)
+        s.mid  = ema(s.mid,  raw.mid,  0.55, 0.85)
+        s.hi   = ema(s.hi,   raw.hi,   0.65, 0.80)
 
         // Write directly — bypasses React re-render
         useStore.getState().setAudioData({ ...s })

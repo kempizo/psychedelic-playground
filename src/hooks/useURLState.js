@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import useStore from '../store/useStore'
-import { deserialize, serialize } from '../utils/shareUtils'
+import { deserialize, serialize, extractSharedPreset } from '../utils/shareUtils'
+import { createPreset } from '../utils/presetUtils'
 
 export function useURLState() {
   const mounted = useRef(false)
@@ -11,6 +12,17 @@ export function useURLState() {
       const state = deserialize(window.location.search)
       const { setControl } = useStore.getState()
       Object.entries(state).forEach(([k, v]) => setControl(k, v))
+
+      const sharedParams = extractSharedPreset(window.location.search)
+      if (sharedParams) {
+        // Apply shared preset params, save to library, mark active
+        Object.entries(sharedParams).forEach(([k, v]) => setControl(k, v))
+        useStore.getState().addPreset(createPreset(sharedParams))
+        // Strip ?preset= from URL so it doesn't persist in share links on reload
+        const url = new URL(window.location.href)
+        url.searchParams.delete('preset')
+        window.history.replaceState(null, '', url.toString())
+      }
     }
     mounted.current = true
   }, [])

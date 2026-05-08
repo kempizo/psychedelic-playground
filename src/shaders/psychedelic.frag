@@ -113,10 +113,14 @@ void main() {
     vec4 puEx = uPulseExtra[i];
     if (pu.w < 0.001) continue;
 
-    vec2  toFrag  = ndcUV - pu.xy;
+    // FBM warp on sample position — each pulse gets an irregular fluid boundary
+    float seed    = puEx.z;
+    float fbmW    = fbm(ndcUV * 3.5 + vec2(seed * 4.7, seed * 6.3));
+    vec2  warpedP = ndcUV + fbmW * 0.05 * pu.w;
+    vec2  toFrag  = warpedP - pu.xy;
     float rawDist = length(toFrag);
 
-    float noisePerturb = noise(toFrag * 2.8 + vec2(puEx.z * 1.37, puEx.z * 0.71))
+    float noisePerturb = noise(toFrag * 2.8 + vec2(seed * 1.37, seed * 0.71))
                        * 0.09 * pu.w;
 
     vec2  dir   = length(puEx.xy) > 0.001 ? normalize(puEx.xy) : vec2(1.0, 0.0);
@@ -128,9 +132,9 @@ void main() {
     float dist = rawDist + noisePerturb;
     dist       = mix(dist, anisoDist + noisePerturb * 0.5, 0.4 * pu.w);
 
-    float d2     = (dist - pu.z) / 0.10;
-    float rInner = d2 < 0.0 ? exp(-d2*d2 * 0.35) : exp(-d2*d2);
-    float ring   = rInner * pu.w;
+    // Non-linear ring falloff: fast outward fade, soft inward shoulder
+    float distFromRing = abs(dist - pu.z);
+    float ring = exp(-distFromRing * distFromRing / (0.0015 + pu.w * 0.003)) * pu.w;
 
     float gd2  = (dist - pu.z) / 0.28;
     float glow = exp(-gd2*gd2 * 0.5) * pu.w * 0.4;

@@ -3,6 +3,7 @@ import VisualCanvas from './components/VisualCanvas'
 import LandingScreen from './components/LandingScreen'
 import ControlPanel from './components/ControlPanel'
 import ShareButton from './components/ShareButton'
+import PresetPanel from './components/PresetPanel'
 import { useURLState } from './hooks/useURLState'
 import { stopMic } from './audio/mic'
 import { stopFile } from './audio/fileAudio'
@@ -57,6 +58,7 @@ export default function App() {
         <>
           <ControlPanel onReset={handleReset} isHidden={isUIHidden} />
           <ShareButton isHidden={isUIHidden} />
+          <PresetPanel isHidden={isUIHidden} />
 
           {/* Fullscreen toggle */}
           <button
