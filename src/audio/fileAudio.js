@@ -8,7 +8,7 @@ export async function connectFile(file) {
   const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
 
   if (activeSource) {
-    try { activeSource.stop() } catch {}
+    try { activeSource.stop() } catch { /* already stopped */ }
   }
 
   activeSource = ctx.createBufferSource()
@@ -21,7 +21,7 @@ export async function connectFile(file) {
 
 export function stopFile() {
   if (activeSource) {
-    try { activeSource.stop() } catch {}
+    try { activeSource.stop() } catch { /* already stopped */ }
     activeSource = null
   }
 }

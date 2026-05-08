@@ -11,6 +11,7 @@ import passVert from '../shaders/psychedelic.vert?raw'
 import particleVert from '../shaders/particle.vert?raw'
 import particleFrag from '../shaders/particle.frag?raw'
 import useStore from '../store/useStore'
+import { BehavioralController } from '../behaviors/BehavioralController'
 
 const MAX_PARTICLES = 128
 
@@ -58,6 +59,12 @@ export function useThreeScene(canvasRef) {
       uColorSpike:      { value: 0 },
       uDistortionSpike: { value: 0 },
       uMouseDir:        { value: new THREE.Vector2(0, 0) },
+      uPulseExtra: { value: [
+        new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
+        new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
+        new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
+        new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
+      ]},
     }
     const mainMat = new THREE.RawShaderMaterial({
       vertexShader: vertSrc,
@@ -140,10 +147,16 @@ export function useThreeScene(canvasRef) {
     const smoothedMouse = new THREE.Vector2(0, 0)
     const mouseDirSmooth = new THREE.Vector2(0, 0)
     let mouseVel = 0
+    let cursorHideTimer = null
 
     const onMouseMove = (e) => {
       rawMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1
       rawMouse.y = -((e.clientY / window.innerHeight) * 2 - 1)
+      clearTimeout(cursorHideTimer)
+      if (canvasRef.current) canvasRef.current.style.cursor = ''
+      cursorHideTimer = setTimeout(() => {
+        if (!isHolding && canvasRef.current) canvasRef.current.style.cursor = 'none'
+      }, 3000)
     }
     window.addEventListener('mousemove', onMouseMove)
 
@@ -161,7 +174,8 @@ export function useThreeScene(canvasRef) {
     let isHolding = false
     let holdStartTime = 0
     let lastHoldSpawn = -999
-    const clock = new THREE.Clock()
+    const clock      = new THREE.Clock()
+    const controller = new BehavioralController()
 
     // ── Pulse manager (render-loop-local, not in Zustand) ─────────────────────
     const MAX_PULSES = 8
@@ -175,6 +189,9 @@ export function useThreeScene(canvasRef) {
       alive: false,
       collidedWith: new Set(),
       birthTime: 0,
+      dirX: 0,
+      dirY: 0,
+      typeIndex: 0,
     }))
     let lastElapsed = 0
 
@@ -205,6 +222,9 @@ export function useThreeScene(canvasRef) {
       p.alive = true
       p.collidedWith = new Set()
       p.birthTime = clock.getElapsedTime()
+      p.dirX = mouseDirSmooth.x
+      p.dirY = mouseDirSmooth.y
+      p.typeIndex = type === 'click' ? 0 : type === 'bass' ? 1 : type === 'hold' ? 2 : 3
     }
 
     const spawnParticle = (px, py, vx, vy, life) => {
@@ -241,16 +261,21 @@ export function useThreeScene(canvasRef) {
       isHolding = true
       holdStartTime = clock.getElapsedTime()
       lastHoldSpawn = holdStartTime
+      canvasRef.current.style.cursor = 'none'
     }
-    const onMouseUp = () => { isHolding = false }
-    window.addEventListener('mousedown', onMouseDown)
-    window.addEventListener('mouseup', onMouseUp)
+    const onMouseUp = () => {
+      isHolding = false
+      canvasRef.current.style.cursor = ''
+    }
+    canvasRef.current.addEventListener('mousedown', onMouseDown)
+    canvasRef.current.addEventListener('mouseup', onMouseUp)
 
-    // Smoothed control values — lerped toward the store each frame so slider
-    // changes feel like influencing a system rather than snapping instantly.
+    // Smoothed control values — lerped toward behavioral targets each frame.
     const { speed: s0, intensity: i0, colorShift: c0, chaos: ch0 } = useStore.getState()
-    const smoothed = { speed: s0, intensity: i0, colorShift: c0, chaos: ch0 }
+    const smoothed = { speed: s0, intensity: i0, colorShift: c0, chaos: ch0, breakSpike: 0 }
     const LERP = 0.05
+
+    let prevSpeed = s0, prevIntensity = i0, prevColorShift = c0, prevChaos = ch0
 
     const tick = () => {
       rafId = requestAnimationFrame(tick)
@@ -262,6 +287,7 @@ export function useThreeScene(canvasRef) {
         const p = pulses[i]
         if (!p.alive) continue
         p.radius += p.speed * dt
+        p.speed   = Math.max(p.speed * 0.994, 0.12)
         p.energy *= p.generation >= 3 ? 0.958 : 0.979
         if (p.energy < 0.01 || p.radius > 2.5) p.alive = false
       }
@@ -307,11 +333,22 @@ export function useThreeScene(canvasRef) {
       const store = useStore.getState()
       const { audioData, speed, intensity, colorShift, chaos, mode } = store
 
-      // Lerp controls toward store targets
-      smoothed.speed      += (speed      - smoothed.speed)      * LERP
-      smoothed.intensity  += (intensity  - smoothed.intensity)  * LERP
-      smoothed.colorShift += (colorShift - smoothed.colorShift) * LERP
-      smoothed.chaos      += (chaos      - smoothed.chaos)      * LERP
+      // Detect slider changes to reset auto-blend idle timer
+      const anyChanged = Math.abs(speed      - prevSpeed)      > 0.005 ||
+                         Math.abs(intensity  - prevIntensity)  > 0.005 ||
+                         Math.abs(colorShift - prevColorShift) > 0.005 ||
+                         Math.abs(chaos      - prevChaos)      > 0.005
+      if (anyChanged) controller.userIdleTimer = 0
+      prevSpeed = speed; prevIntensity = intensity
+      prevColorShift = colorShift; prevChaos = chaos
+
+      // Behavioral controller: blends user controls with state-machine targets
+      const bOut = controller.tick(audioData, dt, { speed, intensity, colorShift, chaos })
+
+      smoothed.speed      += (bOut.speed      - smoothed.speed)      * LERP
+      smoothed.intensity  += (bOut.intensity  - smoothed.intensity)  * LERP
+      smoothed.colorShift += (bOut.colorShift - smoothed.colorShift) * LERP
+      smoothed.chaos      += (bOut.chaos      - smoothed.chaos)      * LERP
 
       // Bass auto-spawn: rising edge with 0.3s cooldown
       const curBass = audioData.bass
@@ -329,6 +366,12 @@ export function useThreeScene(canvasRef) {
       if (isHolding && (elapsed - holdStartTime) > 0.15 && (elapsed - lastHoldSpawn) > 0.25) {
         spawnPulse(rawMouse.x, rawMouse.y, 0.45, 0.7, 'hold', 0)
         lastHoldSpawn = elapsed
+      }
+
+      // Auto-mode: virtual pulses from behavioral controller
+      if (bOut.virtualPulse) {
+        const vp = bOut.virtualPulse
+        spawnPulse(vp.x, vp.y, vp.energy, vp.speed, vp.type, 0)
       }
 
       // Mouse velocity: accumulate movement, decay 0.92/frame
@@ -366,15 +409,25 @@ export function useThreeScene(canvasRef) {
         const p = pulses[i]
         if (p.alive) {
           mainUniforms.uPulses.value[i].set(p.origin.x, p.origin.y, p.radius, p.energy)
+          mainUniforms.uPulseExtra.value[i].set(p.dirX, p.dirY, p.birthTime, p.typeIndex)
         } else {
           mainUniforms.uPulses.value[i].set(0, 0, 0, 0)
+          mainUniforms.uPulseExtra.value[i].set(0, 0, 0, 0)
         }
       }
-      mainUniforms.uColorSpike.value      = Math.max(0, mainUniforms.uColorSpike.value      * 0.951)
-      mainUniforms.uDistortionSpike.value = Math.max(0, mainUniforms.uDistortionSpike.value * 0.919)
+      mainUniforms.uColorSpike.value = Math.max(0, mainUniforms.uColorSpike.value * 0.951)
 
-      // Dynamic trail decay: quiet = 0.84 (more trail), bass hit = 0.80 (pulse flash)
-      trailUniforms.uDecay.value = Math.max(0.80, 0.84 - mainUniforms.uBass.value * 0.04)
+      // Break-event distortion spike blended with collision spike (take max)
+      smoothed.breakSpike += (bOut.breakIntensity - smoothed.breakSpike) * 0.10
+      mainUniforms.uDistortionSpike.value = Math.max(
+        Math.max(0, mainUniforms.uDistortionSpike.value * 0.919),
+        smoothed.breakSpike
+      )
+
+      // State-driven trail decay (behavioral) + mode + bass modulation
+      const baseDecay = bOut.trailDecay ?? (mode === 1 ? 0.88 : 0.84)
+      const minDecay  = baseDecay - 0.04
+      trailUniforms.uDecay.value = Math.max(minDecay, baseDecay - mainUniforms.uBass.value * 0.04)
 
       // Pass 1: main shader → rtA
       // Clear finalUniforms so Three.js doesn't keep trailWrite's texture bound
@@ -437,6 +490,8 @@ export function useThreeScene(canvasRef) {
       for (let i = 0; i < MAX_PARTICLES; i++) {
         if (ages[i] < lives[i]) {
           ages[i] += 1 / 60
+          velocities[i].x *= 0.997
+          velocities[i].y *= 0.997
           positions[i * 3]     += velocities[i].x
           positions[i * 3 + 1] += velocities[i].y
         }
@@ -456,10 +511,11 @@ export function useThreeScene(canvasRef) {
 
     cleanupRef.current = () => {
       cancelAnimationFrame(rafId)
+      clearTimeout(cursorHideTimer)
       window.removeEventListener('resize', onResize)
       window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mousedown', onMouseDown)
-      window.removeEventListener('mouseup', onMouseUp)
+      canvasRef.current?.removeEventListener('mousedown', onMouseDown)
+      canvasRef.current?.removeEventListener('mouseup', onMouseUp)
       renderer.dispose()
       mainMat.dispose()
       trailMat.dispose()

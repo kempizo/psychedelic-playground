@@ -6,12 +6,12 @@ export default function LandingScreen({ onStarted }) {
 
   const handleStarted = () => {
     setFading(true)
-    setTimeout(onStarted, 600)
+    setTimeout(onStarted, 500)
   }
 
   return (
     <div
-      className="fixed inset-0 flex flex-col items-center justify-center z-10 transition-opacity duration-600"
+      className="fixed inset-0 flex flex-col items-center justify-center z-10 transition-opacity duration-500"
       style={{
         opacity: fading ? 0 : 1,
         pointerEvents: fading ? 'none' : 'auto',

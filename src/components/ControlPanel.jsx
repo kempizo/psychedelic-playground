@@ -7,13 +7,13 @@ const CONTROLS = [
   { key: 'chaos',      label: 'Chaos',       min: 0,    max: 1,   step: 0.01 },
 ]
 
-export default function ControlPanel({ onReset }) {
+export default function ControlPanel({ onReset, isHidden }) {
   const { speed, intensity, colorShift, chaos, mode, setControl } = useStore()
 
   const values = { speed, intensity, colorShift, chaos }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 flex justify-center pb-6 px-4 pointer-events-none">
+    <div className={`fixed bottom-0 left-0 right-0 flex justify-center pb-6 px-4 pointer-events-none transition-opacity duration-500 ${isHidden ? 'opacity-0 pointer-events-none' : ''}`}>
       <div
         className="pointer-events-auto w-full max-w-xl rounded-2xl px-6 py-4 flex flex-col gap-3"
         style={{ background: 'rgba(5,5,5,0.75)', backdropFilter: 'blur(12px)', border: '1px solid rgba(0,200,170,0.15)' }}

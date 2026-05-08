@@ -1,13 +1,15 @@
 precision highp float;
 
 varying float vAlpha;
+varying vec3  vColor;
 
 void main() {
-  // Soft circular point
-  vec2 uv = gl_PointCoord - 0.5;
-  float d = length(uv);
-  float alpha = (1.0 - smoothstep(0.3, 0.5, d)) * vAlpha;
-  // Electric teal/green color
-  vec3 col = mix(vec3(0.0, 0.9, 0.7), vec3(0.4, 1.0, 0.1), vAlpha);
-  gl_FragColor = vec4(col, alpha * 0.85);
+  vec2  uv = gl_PointCoord - 0.5;
+  float d  = length(uv);
+
+  float core  = (1.0 - smoothstep(0.20, 0.40, d)) * vAlpha;
+  float bloom = (1.0 - smoothstep(0.0,  0.50, d)) * vAlpha * 0.35;
+
+  float alpha = core * 0.90 + bloom;
+  gl_FragColor = vec4(vColor, alpha);
 }

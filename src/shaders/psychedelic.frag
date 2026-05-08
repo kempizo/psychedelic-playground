@@ -17,6 +17,7 @@ uniform vec4  uPulses[8];
 uniform float uColorSpike;
 uniform float uDistortionSpike;
 uniform vec2  uMouseDir;
+uniform vec4  uPulseExtra[8];
 
 varying vec2 vUv;
 
@@ -96,26 +97,65 @@ void main() {
   float aspect = uResolution.x / uResolution.y;
   vec2  sUV    = (vUv * 2.0 - 1.0) * vec2(aspect, 1.0);
   float t      = uTime * uSpeed * 0.18;
+  float tJitter = t + noise(vec2(t * 0.027, 0.71)) * 0.14;
 
   // ── NDC position for pulse evaluation (un-aspect-corrected) ───────────────
   vec2 ndcUV = vUv * 2.0 - 1.0;
 
-  // ── Pulse ring field ──────────────────────────────────────────────────────
-  vec2  pulseWarp = vec2(0.0);
-  float pulseGlow = 0.0;
+  // ── Pulse ring field (organic, per-type) ─────────────────────────────────
+  vec2  pulseWarp       = vec2(0.0);
+  float pulseGlow       = 0.0;
+  vec3  pulseColorAccum = vec3(0.0);
+  float pulseWeightSum  = 0.0;
+
   for (int i = 0; i < 8; i++) {
-    vec4  pu = uPulses[i];
+    vec4 pu   = uPulses[i];
+    vec4 puEx = uPulseExtra[i];
     if (pu.w < 0.001) continue;
-    vec2  toFrag = ndcUV - pu.xy;
-    float dist   = length(toFrag);
+
+    vec2  toFrag  = ndcUV - pu.xy;
+    float rawDist = length(toFrag);
+
+    float noisePerturb = noise(toFrag * 2.8 + vec2(puEx.z * 1.37, puEx.z * 0.71))
+                       * 0.09 * pu.w;
+
+    vec2  dir   = length(puEx.xy) > 0.001 ? normalize(puEx.xy) : vec2(1.0, 0.0);
+    vec2  perp  = vec2(-dir.y, dir.x);
+    float dPara = dot(toFrag, dir);
+    float dPerp = dot(toFrag, perp);
+    float anisoDist = length(vec2(dPara * 0.88, dPerp * 1.12));
+
+    float dist = rawDist + noisePerturb;
+    dist       = mix(dist, anisoDist + noisePerturb * 0.5, 0.4 * pu.w);
+
     float d2     = (dist - pu.z) / 0.10;
-    float ring   = exp(-d2 * d2) * pu.w;
-    pulseWarp   += ring * normalize(toFrag + vec2(0.0001)) * 0.12;
-    pulseGlow   += ring;
+    float rInner = d2 < 0.0 ? exp(-d2*d2 * 0.35) : exp(-d2*d2);
+    float ring   = rInner * pu.w;
+
+    float gd2  = (dist - pu.z) / 0.28;
+    float glow = exp(-gd2*gd2 * 0.5) * pu.w * 0.4;
+
+    float typeIdx = puEx.w;
+    vec3 typeColor = typeIdx < 0.5 ? vec3(1.00, 0.08, 0.90)
+                  : typeIdx < 1.5 ? vec3(0.00, 0.85, 1.00)
+                  : typeIdx < 2.5 ? vec3(0.55, 0.08, 1.00)
+                                  : vec3(0.08, 0.90, 0.80);
+
+    vec2 warpDir = normalize(toFrag + vec2(noisePerturb, noisePerturb * 0.6) + vec2(0.0001));
+    pulseWarp        += (ring + glow * 0.3) * warpDir * 0.14;
+    pulseGlow        += ring + glow;
+    pulseColorAccum  += typeColor * (ring + glow);
+    pulseWeightSum   += ring + glow;
   }
   pulseGlow = clamp(pulseGlow, 0.0, 1.0);
   sUV += pulseWarp;
   sUV += uMouseDir * uMouseVel * 0.06;
+
+  // Break-event shimmer: sinusoidal screen warp driven by uDistortionSpike
+  sUV += vec2(
+    sin(sUV.y * 5.3 + uTime * 3.1) * uDistortionSpike * 0.028,
+    cos(sUV.x * 4.8 + uTime * 2.7) * uDistortionSpike * 0.022
+  ) * uDistortionSpike;
 
   // ── Virtual camera ─────────────────────────────────────────────────────────
   vec3 ro, rd;
@@ -123,7 +163,7 @@ void main() {
   if (uMode == 0) {
     // Fluid: orbit camera outside the blob
     float orbit = t * 0.55 + uSub * 0.8;
-    float tilt  = cos(t * 0.30) * 0.55;
+    float tilt  = cos(t * 0.30) * 0.55 + sin(t * 0.13) * 0.18;
     float dist  = 2.8 - uBass * 0.55;
 
     ro = vec3(sin(orbit) * dist, tilt + uMouse.y * 0.45, cos(orbit) * dist);
@@ -136,6 +176,11 @@ void main() {
 
   } else {
     // Radial: close macro orbit — clips through surface on bass, cave-like
+    // Polar-spin sUV so the view slowly rotates, creating a vortex effect
+    float r2d   = length(sUV);
+    float a2d   = atan(sUV.y, sUV.x) + uTime * uSpeed * 0.06;
+    vec2  sUV2  = vec2(cos(a2d), sin(a2d)) * r2d * (1.0 - uSub * 0.08);
+
     float orbit2 = t * 0.80 + uSub * 0.6;
     float dist2  = 1.2 - uBass * 0.30;
     ro = vec3(sin(orbit2) * dist2,
@@ -145,7 +190,7 @@ void main() {
     vec3 worldUp2 = abs(fwd2.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     vec3 right2   = normalize(cross(fwd2, worldUp2));
     vec3 up2      = cross(right2, fwd2);
-    rd = normalize(fwd2 + sUV.x * right2 * 0.75 + sUV.y * up2 * 0.75);
+    rd = normalize(fwd2 + sUV2.x * right2 * 0.75 + sUV2.y * up2 * 0.75);
   }
 
   // ── Sphere tracer (40 steps) ───────────────────────────────────────────────
@@ -155,19 +200,21 @@ void main() {
 
   for (int i = 0; i < 40; i++) {
     vec3  p = ro + rd * tRay;
-    float d = sdfBlob(p, t, uBass, uMid, uChaos) + pulseGlow * 0.03;
+    float d = sdfBlob(p, tJitter, uBass, uMid, uChaos) + pulseGlow * 0.03;
     minD = min(minD, abs(d));
     if (abs(d) < 0.006) { hitDist = tRay; break; }
     tRay += max(abs(d) * 0.55, 0.015);
     if (tRay > 10.0) break;
   }
 
+  float depthFog = 1.0 - exp(-tRay * 0.032);
+
   vec3 col = vec3(0.0);
 
   if (hitDist > 0.0) {
     // ── Surface: diffuse + Fresnel rim ──────────────────────────────────────
     vec3  p    = ro + rd * hitDist;
-    vec3  nrm  = calcNormal(p, t, uBass, uMid, uChaos);
+    vec3  nrm  = calcNormal(p, tJitter, uBass, uMid, uChaos);
     vec3  lDir = normalize(vec3(sin(t * 0.35) * 1.2, 0.8, cos(t * 0.35) * 1.2));
 
     float diff    = max(0.0, dot(nrm, lDir)) * 0.65 + 0.18;
@@ -175,23 +222,41 @@ void main() {
 
     // Palette bias fix: 0.4 * v + 0.72 centers on acid-green, avoids red zone
     float noiseV = fbm3(p * 0.55 + t * 0.08);
-    float ct     = noiseV * 0.4 + 0.72 + uColorShift * 0.4 + uHi * 0.10;
+    float ctBias = uMode == 1 ? -0.12 : 0.0;
+    float ct     = noiseV * 0.4 + 0.72 + uColorShift * 0.4 + uHi * 0.10 + ctBias;
 
     col  = palette(ct) * diff;
-    col += palette(ct + 0.32) * fresnel * (0.75 + uHi * 0.65);
+    float rimTight = pow(1.0 - abs(dot(nrm, -rd)), 4.5);
+    float rimWide  = pow(1.0 - abs(dot(nrm, -rd)), 1.8);
+    col += palette(ct + 0.32) * rimTight * (1.4 + uHi * 1.0);
+    col += palette(ct + 0.55) * rimWide  * 0.18;
+    col += vec3(0.9, 1.0, 0.95) * rimTight * 0.06;
     col += palette(ct + 0.50) * 0.06;
     col += uBass * 0.30 * vec3(0.08, 0.38, 0.28);
+    col *= (1.0 - hitDist / 8.0 * 0.12);
 
   } else {
     // ── Volumetric glow: near-miss rays accumulate fog ───────────────────────
-    float glow = exp(-minD * 3.5) * 0.65;
-    float bgT  = fbm(sUV * 0.35 + vec2(t * 0.06, 0.0)) * 0.4 + 0.72 + uColorShift * 0.3;
+    float glow  = exp(-minD * 3.5) * 0.65;
+    vec2 bgFlow = vec2(
+      sin(t * 0.04 + sUV.y * 0.65) * 0.18,
+      cos(t * 0.035 + sUV.x * 0.55) * 0.14
+    );
+    float bgT = fbm(sUV * 0.35 + bgFlow) * 0.4 + 0.72 + uColorShift * 0.3;
     col  = palette(bgT) * glow * (0.45 + uBass * 0.55);
     col += palette(bgT + 0.50) * 0.07;
+    col *= (1.0 - depthFog * 0.45);
+    col += palette(bgT + 0.30) * depthFog * 0.07 * (0.3 + uBass * 0.2);
   }
 
+  // ── Subsurface proximity glow ─────────────────────────────────────────────
+  float proxGlow = exp(-minD * minD * 18.0);
+  float proxT    = fbm(sUV * 0.28 + vec2(t * 0.05, 0.0)) * 0.4 + 0.72 + uColorShift * 0.3;
+  col += palette(proxT + 0.15) * proxGlow * (0.35 + uBass * 0.45);
+
   // ── Pulse ring color overlay ──────────────────────────────────────────────
-  col += vec3(0.0, 0.72, 0.85) * pulseGlow * (0.8 + uColorSpike * 0.5);
+  vec3 pulseColorMix = pulseWeightSum > 0.001 ? pulseColorAccum / pulseWeightSum : vec3(0.0, 0.72, 0.85);
+  col += pulseColorMix * pulseGlow * (0.8 + uColorSpike * 0.5);
   col += palette(t * 0.4 + 0.5) * uColorSpike * 0.25;
 
   // ── Mouse energy ripple ────────────────────────────────────────────────────
