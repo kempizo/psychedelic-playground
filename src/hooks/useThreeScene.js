@@ -49,6 +49,14 @@ export function useThreeScene(canvasRef) {
       uMode:       { value: 0 },
       uMouse:      { value: new THREE.Vector2(0, 0) },
       uMouseVel:   { value: 0 },
+      uPulses:          { value: [
+        new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
+        new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
+        new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
+        new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
+      ]},
+      uColorSpike:      { value: 0 },
+      uDistortionSpike: { value: 0 },
     }
     const mainMat = new THREE.RawShaderMaterial({
       vertexShader: vertSrc,
@@ -147,6 +155,59 @@ export function useThreeScene(canvasRef) {
     let lastHi = 0
     const clock = new THREE.Clock()
 
+    // ── Pulse manager (render-loop-local, not in Zustand) ─────────────────────
+    const MAX_PULSES = 8
+    const pulses = Array.from({ length: MAX_PULSES }, () => ({
+      origin: new THREE.Vector2(0, 0),
+      energy: 0,
+      speed: 0,
+      radius: 0,
+      type: 'click',
+      generation: 0,
+      alive: false,
+      collidedWith: new Set(),
+      birthTime: 0,
+    }))
+    let lastElapsed = 0
+
+    const spawnPulse = (x, y, energy, speed, type, generation = 0) => {
+      let slot = -1
+      for (let i = 0; i < MAX_PULSES; i++) {
+        if (!pulses[i].alive) { slot = i; break }
+      }
+      if (slot === -1) {
+        let minGen = 999, oldestBirth = Infinity
+        for (let i = 0; i < MAX_PULSES; i++) {
+          const p = pulses[i]
+          if (p.generation < minGen ||
+              (p.generation === minGen && p.birthTime < oldestBirth)) {
+            minGen = p.generation
+            oldestBirth = p.birthTime
+            slot = i
+          }
+        }
+      }
+      const p = pulses[slot]
+      p.origin.set(x, y)
+      p.energy = energy
+      p.speed = speed
+      p.radius = 0
+      p.type = type
+      p.generation = generation
+      p.alive = true
+      p.collidedWith = new Set()
+      p.birthTime = clock.getElapsedTime()
+    }
+
+    const onMouseDown = (e) => {
+      const x = (e.clientX / window.innerWidth)  * 2 - 1
+      const y = -((e.clientY / window.innerHeight) * 2 - 1)
+      spawnPulse(x, y, 0.85, 0.7, 'click', 0)
+    }
+    const onMouseUp = () => {}
+    window.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('mouseup', onMouseUp)
+
     // Smoothed control values — lerped toward the store each frame so slider
     // changes feel like influencing a system rather than snapping instantly.
     const { speed: s0, intensity: i0, colorShift: c0, chaos: ch0 } = useStore.getState()
@@ -156,6 +217,17 @@ export function useThreeScene(canvasRef) {
     const tick = () => {
       rafId = requestAnimationFrame(tick)
       const elapsed = clock.getElapsedTime()
+      const dt = elapsed - lastElapsed
+      lastElapsed = elapsed
+
+      for (let i = 0; i < MAX_PULSES; i++) {
+        const p = pulses[i]
+        if (!p.alive) continue
+        p.radius += p.speed * dt
+        p.energy *= 0.979
+        if (p.energy < 0.01 || p.radius > 2.5) p.alive = false
+      }
+
       const store = useStore.getState()
       const { audioData, speed, intensity, colorShift, chaos, mode } = store
 
@@ -186,6 +258,16 @@ export function useThreeScene(canvasRef) {
       mainUniforms.uMode.value       = mode
       mainUniforms.uMouse.value.set(smoothedMouse.x * aspect, smoothedMouse.y)
       mainUniforms.uMouseVel.value   = mouseVel
+      for (let i = 0; i < MAX_PULSES; i++) {
+        const p = pulses[i]
+        if (p.alive) {
+          mainUniforms.uPulses.value[i].set(p.origin.x, p.origin.y, p.radius, p.energy)
+        } else {
+          mainUniforms.uPulses.value[i].set(0, 0, 0, 0)
+        }
+      }
+      mainUniforms.uColorSpike.value      = Math.max(0, mainUniforms.uColorSpike.value      * 0.951)
+      mainUniforms.uDistortionSpike.value = Math.max(0, mainUniforms.uDistortionSpike.value * 0.919)
 
       // Dynamic trail decay: quiet = 0.84 (more trail), bass hit = 0.80 (pulse flash)
       trailUniforms.uDecay.value = Math.max(0.80, 0.84 - mainUniforms.uBass.value * 0.04)
@@ -260,6 +342,8 @@ export function useThreeScene(canvasRef) {
       cancelAnimationFrame(rafId)
       window.removeEventListener('resize', onResize)
       window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mousedown', onMouseDown)
+      window.removeEventListener('mouseup', onMouseUp)
       renderer.dispose()
       mainMat.dispose()
       trailMat.dispose()
