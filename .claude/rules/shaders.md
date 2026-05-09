@@ -10,20 +10,29 @@ paths:
 - Every fragment shader paired with `RawShaderMaterial` MUST start with `precision highp float;` — `RawShaderMaterial` injects nothing.
 - `ShaderMaterial` (used for particles) auto-injects precision and built-in uniforms (`modelViewMatrix`, `projectionMatrix`, `position`, `uv`). Don't redeclare.
 
-## Color palette — fixed
-The look is "organic consciousness engine": teal → acid green → deep violet emerging from near-black (`#050505`). Do not introduce:
-- Full rainbow gradients
-- Warm hues (red/orange/magenta) — they break the aesthetic
-- High-contrast strobing
+## Color palette — dual family system
+The look is "organic consciousness engine". Two palette families exist; do not introduce a third.
 
-The cosine palette in `psychedelic.frag`:
+**Family 0 — default** (teal → acid green → deep violet, near-black base):
 ```glsl
-vec3 a = vec3(0.05, 0.08, 0.10);   // dark base
-vec3 b = vec3(0.38, 0.48, 0.28);   // range
-vec3 c = vec3(1.00, 0.80, 1.20);   // frequency
-vec3 d = vec3(0.45, 0.25, 0.65);   // teal/green/violet offsets
-return a + b * cos(6.28318 * (c * t + d));
+vec3 a = vec3(0.05, 0.08, 0.10);
+vec3 b = vec3(0.38, 0.48, 0.28);
+vec3 c = vec3(1.00, 0.80, 1.20);
+vec3 d = vec3(0.45, 0.25, 0.65);
 ```
+
+**Family 1 — break/pink** (deep purple → electric violet → neon pink, triggered by break events):
+```glsl
+vec3 a = vec3(0.10, 0.04, 0.14);
+vec3 b = vec3(0.55, 0.20, 0.45);
+vec3 c = vec3(1.10, 0.70, 1.20);
+vec3 d = vec3(0.95, 0.10, 0.55);
+```
+
+The blend is controlled by `uPaletteFamily` (0 or 1, set by mode >= 2) and `uPaletteShift` (0–1 float, pushed by break events). The final `palette(t)` call in the shader mixes both families based on these. Never touch the `a/b/c/d` vectors without understanding how the full `t` distribution maps across the cosine. The palette bias is `t = value * 0.4 + 0.72` (centers on acid-green, avoids the red zone at t≈0.5).
+
+Do not introduce: full rainbow gradients, warm hues (red/orange), high-contrast strobing.
+
 Tuning hints: increase `a` to lift black floor, increase `b` to brighten, change `d` components to shift hue regions. Reference: https://iquilezles.org/articles/palettes/
 
 ## FBM + domain warping
@@ -39,9 +48,10 @@ GLSL fails silently on type mismatch. The setup:
 | Uniform | GLSL type | JS value type |
 |---------|-----------|---------------|
 | `uTime`, `uBass`, `uMid`, `uHi`, `uSub`, `uSpeed`, `uIntensity`, `uColorShift`, `uChaos` | `float` | JS `number` |
-| `uMouseVel` | `float` | JS `number` (0–1, decays per frame) |
-| `uMode` | `int` | JS integer (no decimals) |
-| `uResolution`, `uMouse` | `vec2` | `THREE.Vector2` |
+| `uMouseVel`, `uColorSpike`, `uDistortionSpike`, `uEnergy`, `uPaletteShift` | `float` | JS `number` |
+| `uMode`, `uPaletteFamily` | `int` | JS integer (no decimals) |
+| `uResolution`, `uMouse`, `uMouseDir`, `uCamDrift` | `vec2` | `THREE.Vector2` |
+| `uPulses`, `uPulseExtra` | `vec4[8]` | `THREE.Vector4[]` |
 | `uCurrent`, `uPrev` | `sampler2D` | `THREE.Texture` |
 
 When adding a uniform, declare it in BOTH the frag shader AND the `mainUniforms` object in `useThreeScene.js`. The render loop must update it each frame.
@@ -52,10 +62,17 @@ When adding a uniform, declare it in BOTH the frag shader AND the `mainUniforms`
 3. Test both modes (`uMode == 0` and `uMode == 1`). The polar mode warps `p` differently and many effects need adjustment for it.
 
 ## Modes
-- `uMode == 0` (Fluid): Cartesian domain warp, flowing liquid feel.
-- `uMode == 1` (Radial): converts `p` to polar before warping, mandala-like radial symmetry.
+There are 5 SDF ray-march modes (0–4). Do not add a 6th without removing one first.
 
-To add a new mode, branch on `uMode` early. Don't add more than 3 modes total — proliferating modes dilutes the experience.
+| `uMode` | Name | Camera / SDF behaviour |
+|---------|------|------------------------|
+| 0 | Fluid | Orbiting camera outside blob — flowing liquid feel |
+| 1 | Radial | Close macro-orbit, clips through surface — cave / tunnel |
+| 2 | Vortex | Spiral UV rotation + orbiting camera; particles spawn tangentially |
+| 3 | Collapse | Camera pulses inward on bass, outward on mid |
+| 4 | Orbit | Three-blob SDF (`sdfOrbit`), particles spawn at 120° seam regions |
+
+Modes 0–1 use palette family 0 (teal/green/violet). Modes 2–4 use palette family 1 (pink/violet) via `uPaletteFamily`.
 
 ## Performance budget
 Target 60 fps on M1 / mid-range desktop GPU. Red flags:
@@ -66,11 +83,8 @@ Target 60 fps on M1 / mid-range desktop GPU. Red flags:
 ## Trail / feedback shader
 `trail.frag` blends current and previous frames: `mix(current, prev, uDecay)`. `uDecay` is now driven dynamically from `useThreeScene.js` each frame: `0.84 − uBass * 0.04`, clamped to [0.80, 0.84]. Quiet = more persistence (0.84); bass hit = faster clear (0.80). Never go above 0.9 (excessive smearing) or below 0.7 (kills persistence).
 
-## Known palette issue — tColor red zone
-The cosine palette produces **red/orange at `t ≈ 0.5`** (R peaks there given `d.r = 0.45`, `c.r = 1.0`). The current `tColor = f * 0.5 + 0.5` formula centers the distribution exactly on that zone, so the idle shader shows warm reddish tones rather than teal/green. Fix: shift the bias with `tColor = f * 0.4 + 0.72` (centers on `t ≈ 0.72`, the acid-green region). This is an **open issue** — not yet applied.
-
-## Known missing feature — touch events
-`uMouse` / `uMouseVel` are updated from a `mousemove` listener. **Mobile touch events are not mapped** — touch users see no distortion stirring. Fix: add a `touchmove` handler in `useThreeScene.js` that writes to `rawMouse` using `e.touches[0].clientX/Y`.
+## uCamDrift — slow camera drift accumulator
+`uCamDrift` (vec2) is a per-session accumulator driven by sub-bass. It integrates `subNL * intensity * 0.0015` each frame using oscillating sin/cos directions so the drift wanders rather than locking to a fixed axis. Decays at `0.9975` per frame (~30s half-life). Applied as a `ro.xz` offset in all 5 camera modes. Do not drive it faster than the existing sub-band — it would stutter on kicks.
 
 ## Common bugs
 - **Black screen**: usually a precision missing, or `uMode` was passed as float instead of int.

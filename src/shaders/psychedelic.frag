@@ -18,6 +18,11 @@ uniform float uColorSpike;
 uniform float uDistortionSpike;
 uniform vec2  uMouseDir;
 uniform vec4  uPulseExtra[8];
+uniform float uEnergy;
+uniform int   uPaletteFamily;
+uniform float uPaletteShift;
+// Slow-decaying sub-bass accumulator — adds lazy drift weight to camera position
+uniform vec2  uCamDrift;
 
 varying vec2 vUv;
 
@@ -45,10 +50,16 @@ float noise3(vec3 p) {
         + noise(p.xz + p.y * 1.5731)) * 0.3333;
 }
 
-// 6-octave 2D FBM (background + color sampling)
+// 6-octave 2D FBM. Top octave (i==5) gated by uEnergy so idle is smoother.
 float fbm(vec2 p) {
   float v = 0.0, a = 0.5, f = 1.0;
-  for (int i = 0; i < 6; i++) { v += a * noise(p * f); f *= 2.1; a *= 0.48; }
+  float topGate = mix(0.0, 1.0, smoothstep(0.15, 0.55, uEnergy));
+  for (int i = 0; i < 6; i++) {
+    float contrib = a * noise(p * f);
+    if (i == 5) contrib *= topGate;
+    v += contrib;
+    f *= 2.1; a *= 0.48;
+  }
   return v;
 }
 
@@ -59,8 +70,10 @@ float fbm3(vec3 p) {
   return v;
 }
 
-// ── Palette: teal → acid green → deep violet (unchanged) ──────────────────────
-vec3 palette(float t) {
+// ── Dual palette system ────────────────────────────────────────────────────────
+// Family 0: teal → acid green → deep violet (unchanged)
+// Family 1: deep purple base → electric violet → neon pink hot
+vec3 paletteFamily0(float t) {
   vec3 a = vec3(0.05, 0.08, 0.10);
   vec3 b = vec3(0.38, 0.48, 0.28);
   vec3 c = vec3(1.00, 0.80, 1.20);
@@ -68,10 +81,22 @@ vec3 palette(float t) {
   return a + b * cos(6.28318 * (c * t + d));
 }
 
+vec3 paletteFamily1(float t) {
+  vec3 a = vec3(0.10, 0.04, 0.14);
+  vec3 b = vec3(0.55, 0.20, 0.45);
+  vec3 c = vec3(1.10, 0.70, 1.20);
+  vec3 d = vec3(0.95, 0.10, 0.55);
+  return a + b * cos(6.28318 * (c * t + d));
+}
+
+vec3 palette(float t) {
+  float blendFactor = clamp(float(uPaletteFamily) + uPaletteShift, 0.0, 1.0);
+  return mix(paletteFamily0(t), paletteFamily1(t), blendFactor);
+}
+
 // ── SDF: organic blob ──────────────────────────────────────────────────────────
-// Trig warp handles shape (free) + one FBM layer for surface bumpiness.
-// Multiplied by 0.7 as Lipschitz correction (conservative — prevents over-step).
-float sdfBlob(vec3 p, float t, float bass, float mid, float chaos) {
+// tBase param is the slow evolution time used for the ambient breathing term
+float sdfBlob(vec3 p, float t, float tBase, float bass, float mid, float chaos) {
   float warp = chaos * 1.4 + 0.3;
   vec3 q = p + warp * 0.35 * vec3(
     sin(p.y * 2.1 + t * 1.1) + cos(p.z * 1.7 + t * 0.8),
@@ -79,25 +104,60 @@ float sdfBlob(vec3 p, float t, float bass, float mid, float chaos) {
     sin(p.x * 1.5 + t * 0.9) + cos(p.y * 2.7 + t * 0.6)
   );
   float disp = fbm3(q * 1.2 + t * 0.15) * (0.28 + mid * 0.40 + bass * 0.18);
-  return (length(q) - (0.85 + bass * 0.28 + disp)) * 0.70;
+  // Two incommensurate sinusoids ensure the orb is always alive at silence
+  float breath = sin(tBase * 0.7) * 0.015 + sin(tBase * 0.31) * 0.008;
+  return (length(q) - (0.85 + bass * 0.28 + disp + breath)) * 0.70;
+}
+
+// Orbit mode: three copies of blob 120° apart, collapse via min
+float sdfOrbit(vec3 p, float t, float tBase, float bass, float mid, float chaos) {
+  float rotPhase = tBase * 0.4 + mid * 1.8;
+  float sep = 0.35 + mid * 0.55;
+
+  // Rotate p around Z axis at three phases
+  float c0 = cos(rotPhase),          s0 = sin(rotPhase);
+  float c1 = cos(rotPhase + 2.094),  s1 = sin(rotPhase + 2.094);
+  float c2 = cos(rotPhase + 4.189),  s2 = sin(rotPhase + 4.189);
+
+  vec3 p0 = vec3(p.x + c0 * sep, p.y + s0 * sep, p.z);
+  vec3 p1 = vec3(p.x + c1 * sep, p.y + s1 * sep, p.z);
+  vec3 p2 = vec3(p.x + c2 * sep, p.y + s2 * sep, p.z);
+
+  float d0 = sdfBlob(p0, t, tBase, bass * 0.7, mid, chaos);
+  float d1 = sdfBlob(p1, t, tBase, bass * 0.7, mid, chaos);
+  float d2 = sdfBlob(p2, t, tBase, bass * 0.7, mid, chaos);
+  return min(min(d0, d1), d2);
 }
 
 // Forward-difference normals: 4 SDF evals (vs 6 for central differences)
-vec3 calcNormal(vec3 p, float t, float bass, float mid, float chaos) {
+vec3 calcNormal(vec3 p, float t, float tBase, float bass, float mid, float chaos, int mode) {
   float eps = 0.012;
-  float c = sdfBlob(p, t, bass, mid, chaos);
-  return normalize(vec3(
-    sdfBlob(p + vec3(eps, 0.0, 0.0), t, bass, mid, chaos) - c,
-    sdfBlob(p + vec3(0.0, eps, 0.0), t, bass, mid, chaos) - c,
-    sdfBlob(p + vec3(0.0, 0.0, eps), t, bass, mid, chaos) - c
-  ));
+  float c;
+  if (mode == 4) {
+    c = sdfOrbit(p, t, tBase, bass, mid, chaos);
+    return normalize(vec3(
+      sdfOrbit(p + vec3(eps, 0.0, 0.0), t, tBase, bass, mid, chaos) - c,
+      sdfOrbit(p + vec3(0.0, eps, 0.0), t, tBase, bass, mid, chaos) - c,
+      sdfOrbit(p + vec3(0.0, 0.0, eps), t, tBase, bass, mid, chaos) - c
+    ));
+  } else {
+    c = sdfBlob(p, t, tBase, bass, mid, chaos);
+    return normalize(vec3(
+      sdfBlob(p + vec3(eps, 0.0, 0.0), t, tBase, bass, mid, chaos) - c,
+      sdfBlob(p + vec3(0.0, eps, 0.0), t, tBase, bass, mid, chaos) - c,
+      sdfBlob(p + vec3(0.0, 0.0, eps), t, tBase, bass, mid, chaos) - c
+    ));
+  }
 }
 
 void main() {
   float aspect = uResolution.x / uResolution.y;
   vec2  sUV    = (vUv * 2.0 - 1.0) * vec2(aspect, 1.0);
-  float t      = uTime * uSpeed * 0.18;
-  float tJitter = t + noise(vec2(t * 0.027, 0.71)) * 0.14;
+  // Layered time: tBase drives slow evolution; tDetail drives fine noise on top octaves only
+  float tBase   = uTime * uSpeed * 0.18;
+  float tDetail = uTime * uSpeed * 0.6;
+  float t       = tBase;
+  float tJitter = tBase + noise(vec2(tBase * 0.027, 0.71)) * 0.14;
 
   // ── NDC position for pulse evaluation (un-aspect-corrected) ───────────────
   vec2 ndcUV = vUv * 2.0 - 1.0;
@@ -113,7 +173,6 @@ void main() {
     vec4 puEx = uPulseExtra[i];
     if (pu.w < 0.001) continue;
 
-    // FBM warp on sample position — each pulse gets an irregular fluid boundary
     float seed    = puEx.z;
     float fbmW    = fbm(ndcUV * 3.5 + vec2(seed * 4.7, seed * 6.3));
     vec2  warpedP = ndcUV + fbmW * 0.05 * pu.w;
@@ -132,7 +191,6 @@ void main() {
     float dist = rawDist + noisePerturb;
     dist       = mix(dist, anisoDist + noisePerturb * 0.5, 0.4 * pu.w);
 
-    // Non-linear ring falloff: fast outward fade, soft inward shoulder
     float distFromRing = abs(dist - pu.z);
     float ring = exp(-distFromRing * distFromRing / (0.0015 + pu.w * 0.003)) * pu.w;
 
@@ -161,6 +219,16 @@ void main() {
     cos(sUV.x * 4.8 + uTime * 2.7) * uDistortionSpike * 0.022
   ) * uDistortionSpike;
 
+  // ── Mandala / radial influence layer ──────────────────────────────────────
+  // Biases the FBM warp toward radial direction during peak/break. Never perfect.
+  float radialBias = uEnergy * smoothstep(0.3, 0.85, uEnergy) * uPaletteShift * 0.6
+                   + uEnergy * smoothstep(0.6, 1.0, uEnergy) * 0.25;
+  float sectorCount = 5.0 + sin(uTime * 0.07) * 2.0;
+  vec2  radialP     = ndcUV;
+  float radialAngle = atan(radialP.y, radialP.x);
+  float mandalaWarp = sin(radialAngle * sectorCount + uTime * 0.3) * radialBias * 0.06;
+  sUV += normalize(radialP + vec2(0.0001)) * mandalaWarp;
+
   // ── Virtual camera ─────────────────────────────────────────────────────────
   vec3 ro, rd;
 
@@ -170,7 +238,7 @@ void main() {
     float tilt  = cos(t * 0.30) * 0.55 + sin(t * 0.13) * 0.18;
     float dist  = 2.8 - uBass * 0.55;
 
-    ro = vec3(sin(orbit) * dist, tilt + uMouse.y * 0.45, cos(orbit) * dist);
+    ro = vec3(sin(orbit) * dist + uCamDrift.x, tilt + uMouse.y * 0.45, cos(orbit) * dist + uCamDrift.y);
     vec3 target  = vec3(uMouse.x * 0.45, uMouse.y * 0.25, 0.0);
     vec3 fwd     = normalize(target - ro);
     vec3 worldUp = abs(fwd.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
@@ -178,23 +246,66 @@ void main() {
     vec3 up      = cross(right, fwd);
     rd = normalize(fwd + sUV.x * right * 0.65 + sUV.y * up * 0.65);
 
-  } else {
+  } else if (uMode == 1) {
     // Radial: close macro orbit — clips through surface on bass, cave-like
-    // Polar-spin sUV so the view slowly rotates, creating a vortex effect
     float r2d   = length(sUV);
     float a2d   = atan(sUV.y, sUV.x) + uTime * uSpeed * 0.06;
     vec2  sUV2  = vec2(cos(a2d), sin(a2d)) * r2d * (1.0 - uSub * 0.08);
 
     float orbit2 = t * 0.80 + uSub * 0.6;
     float dist2  = 1.2 - uBass * 0.30;
-    ro = vec3(sin(orbit2) * dist2,
+    ro = vec3(sin(orbit2) * dist2 + uCamDrift.x,
               cos(t * 0.35) * dist2 * 0.55 + uMouse.y * 0.35,
-              cos(orbit2) * dist2);
+              cos(orbit2) * dist2 + uCamDrift.y);
     vec3 fwd2     = normalize(-ro);
     vec3 worldUp2 = abs(fwd2.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     vec3 right2   = normalize(cross(fwd2, worldUp2));
     vec3 up2      = cross(right2, fwd2);
     rd = normalize(fwd2 + sUV2.x * right2 * 0.75 + sUV2.y * up2 * 0.75);
+
+  } else if (uMode == 2) {
+    // Vortex: spiral camera rotation proportional to sub+bass; center pull on p
+    float vortexAngle = tBase * 0.65 + (uSub + uBass) * 1.4;
+    float r2d   = length(sUV);
+    // Spiral: rotate UV by an angle that increases toward center
+    float spinAmount = (uSub * 0.4 + uBass * 0.6) * 0.8 + tBase * 0.05;
+    float a2d   = atan(sUV.y, sUV.x) + spinAmount * (1.0 - smoothstep(0.0, 1.8, r2d));
+    vec2  sUV2  = vec2(cos(a2d), sin(a2d)) * r2d;
+
+    float orbit = vortexAngle;
+    float dist  = 2.2 - uBass * 0.45;
+    ro = vec3(sin(orbit) * dist + uCamDrift.x, cos(t * 0.22) * 0.7 + uMouse.y * 0.5, cos(orbit) * dist + uCamDrift.y);
+    vec3 fwd     = normalize(-ro + vec3(uMouse.x * 0.3, 0.0, 0.0));
+    vec3 worldUp = abs(fwd.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 right   = normalize(cross(fwd, worldUp));
+    vec3 up      = cross(right, fwd);
+    rd = normalize(fwd + sUV2.x * right * 0.70 + sUV2.y * up * 0.70);
+
+  } else if (uMode == 3) {
+    // Collapse: ray origin oscillates inward on bass kick, outward on mid
+    float collapseZ = 2.4 - uBass * 0.6 + uMid * 0.35;
+    float orbit = tBase * 0.45 + uSub * 0.5;
+    float tilt  = sin(tBase * 0.28) * 0.40 + uMouse.y * 0.4;
+    ro = vec3(sin(orbit) * collapseZ + uCamDrift.x, tilt, cos(orbit) * collapseZ + uCamDrift.y);
+    vec3 target  = vec3(uMouse.x * 0.35, uMouse.y * 0.15, 0.0);
+    vec3 fwd     = normalize(target - ro);
+    vec3 worldUp = abs(fwd.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 right   = normalize(cross(fwd, worldUp));
+    vec3 up      = cross(right, fwd);
+    rd = normalize(fwd + sUV.x * right * 0.60 + sUV.y * up * 0.60);
+
+  } else {
+    // Orbit (mode 4): standard Fluid-like camera, SDF uses 3-copy orbit
+    float orbit = t * 0.50 + uSub * 0.7;
+    float tilt  = cos(t * 0.27) * 0.50 + sin(t * 0.15) * 0.15;
+    float dist  = 3.0 - uBass * 0.4;
+    ro = vec3(sin(orbit) * dist + uCamDrift.x, tilt + uMouse.y * 0.40, cos(orbit) * dist + uCamDrift.y);
+    vec3 target  = vec3(uMouse.x * 0.40, uMouse.y * 0.20, 0.0);
+    vec3 fwd     = normalize(target - ro);
+    vec3 worldUp = abs(fwd.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 right   = normalize(cross(fwd, worldUp));
+    vec3 up      = cross(right, fwd);
+    rd = normalize(fwd + sUV.x * right * 0.65 + sUV.y * up * 0.65);
   }
 
   // ── Sphere tracer (40 steps) ───────────────────────────────────────────────
@@ -204,7 +315,14 @@ void main() {
 
   for (int i = 0; i < 40; i++) {
     vec3  p = ro + rd * tRay;
-    float d = sdfBlob(p, tJitter, uBass, uMid, uChaos) + pulseGlow * 0.03;
+    float d;
+    if (uMode == 4) {
+      d = sdfOrbit(p, tJitter, tBase, uBass, uMid, uChaos) + pulseGlow * 0.03;
+    } else {
+      // Collapse: modulate blob radius by bass-mid difference
+      float collapseMod = uMode == 3 ? (uBass - uMid) * 0.20 : 0.0;
+      d = sdfBlob(p, tJitter, tBase, uBass + collapseMod, uMid, uChaos) + pulseGlow * 0.03;
+    }
     minD = min(minD, abs(d));
     if (abs(d) < 0.006) { hitDist = tRay; break; }
     tRay += max(abs(d) * 0.55, 0.015);
@@ -218,16 +336,15 @@ void main() {
   if (hitDist > 0.0) {
     // ── Surface: diffuse + Fresnel rim ──────────────────────────────────────
     vec3  p    = ro + rd * hitDist;
-    vec3  nrm  = calcNormal(p, tJitter, uBass, uMid, uChaos);
+    vec3  nrm  = calcNormal(p, tJitter, tBase, uBass, uMid, uChaos, uMode);
     vec3  lDir = normalize(vec3(sin(t * 0.35) * 1.2, 0.8, cos(t * 0.35) * 1.2));
 
     float diff    = max(0.0, dot(nrm, lDir)) * 0.65 + 0.18;
     float fresnel = pow(1.0 - abs(dot(nrm, -rd)), 2.5);
 
-    // Palette bias fix: 0.4 * v + 0.72 centers on acid-green, avoids red zone
+    // Palette bias fix: 0.4 * v + 0.72 centers on acid-green / violet, avoids red zone
     float noiseV = fbm3(p * 0.55 + t * 0.08);
-    float ctBias = uMode == 1 ? -0.12 : 0.0;
-    float ct     = noiseV * 0.4 + 0.72 + uColorShift * 0.4 + uHi * 0.10 + ctBias;
+    float ct     = noiseV * 0.4 + 0.72 + uColorShift * 0.4 + uHi * 0.10;
 
     col  = palette(ct) * diff;
     float rimTight = pow(1.0 - abs(dot(nrm, -rd)), 4.5);

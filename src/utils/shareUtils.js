@@ -20,7 +20,7 @@ export function deserialize(search) {
   const out = { ...DEFAULTS }
   KEYS.forEach((k) => {
     const v = params.get(k)
-    if (v !== null) out[k] = k === 'mode' ? parseInt(v, 10) : parseFloat(v)
+    if (v !== null) out[k] = k === 'mode' ? Math.max(0, Math.min(4, parseInt(v, 10))) : parseFloat(v)
   })
   return out
 }

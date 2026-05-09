@@ -1,11 +1,13 @@
-import { useRef } from 'react'
+import { useRef, forwardRef, useImperativeHandle } from 'react'
 import { useThreeScene } from '../hooks/useThreeScene'
 import { useAudioAnalyser } from '../hooks/useAudioAnalyser'
 
-export default function VisualCanvas() {
+const VisualCanvas = forwardRef(function VisualCanvas(_, ref) {
   const canvasRef = useRef(null)
   useThreeScene(canvasRef)
   useAudioAnalyser()
+
+  useImperativeHandle(ref, () => canvasRef.current)
 
   return (
     <canvas
@@ -14,4 +16,6 @@ export default function VisualCanvas() {
       style={{ display: 'block' }}
     />
   )
-}
+})
+
+export default VisualCanvas

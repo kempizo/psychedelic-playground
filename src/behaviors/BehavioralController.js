@@ -11,6 +11,7 @@ const STATE_TARGETS = {
 export class BehavioralController {
   constructor() {
     this.state       = 'calm'
+    this.prevState   = 'calm'
     this.stateTimer  = 0
     this.energy      = 0
     this.energyPrev  = 0
@@ -24,7 +25,12 @@ export class BehavioralController {
     this.autoTimer      = 0
     this.silenceTimer   = 0
 
+    // Smooth state transitions over ~600ms
+    this.stateBlend = 1.0
+    this.prevTargets = { ...STATE_TARGETS.calm }
+
     this.breakEvent = { active: false, timer: 0, duration: 0, intensity: 0 }
+    this.breakIntensity = 0
   }
 
   _updateEnergy(audioData, dt) {
@@ -57,8 +63,11 @@ export class BehavioralController {
     }
 
     if (next !== this.state) {
-      this.state      = next
-      this.stateTimer = 0
+      this.prevState   = this.state
+      this.prevTargets = { ...STATE_TARGETS[this.state] }
+      this.state       = next
+      this.stateTimer  = 0
+      this.stateBlend  = 0
     }
   }
 
@@ -79,7 +88,14 @@ export class BehavioralController {
       : this.breakEvent.intensity * (1 - (p - 0.1) / 0.9)
   }
 
+  injectEnergy(amount) {
+    this.energy = Math.min(1.0, this.energy + amount)
+  }
+
   _updateBreakEvent(dt) {
+    // Decay breakIntensity each tick
+    this.breakIntensity *= Math.pow(0.94, dt * 60)
+
     if (this.breakEvent.active) {
       this.breakEvent.timer += dt
       if (this.breakEvent.timer >= this.breakEvent.duration) {
@@ -93,6 +109,7 @@ export class BehavioralController {
           duration: 4 + Math.random() * 6,
           intensity: 0.4 + Math.random() * 0.5,
         }
+        this.breakIntensity = 1.0
       }
     }
   }
@@ -139,15 +156,24 @@ export class BehavioralController {
     this.userIdleTimer += dt
     this.autoTimer     += dt
 
-    const stateTgt = STATE_TARGETS[this.state]
-    const drift    = this._computeDrift()
+    // Ramp stateBlend to 1 over ~600ms for smooth state cross-fades
+    this.stateBlend = Math.min(1.0, this.stateBlend + dt / 0.6)
+    const newTgt    = STATE_TARGETS[this.state]
+    const prevTgt   = this.prevTargets
+    const blendedTgt = {
+      speed:      prevTgt.speed      + (newTgt.speed      - prevTgt.speed)      * this.stateBlend,
+      chaos:      prevTgt.chaos      + (newTgt.chaos      - prevTgt.chaos)      * this.stateBlend,
+      intensity:  prevTgt.intensity  + (newTgt.intensity  - prevTgt.intensity)  * this.stateBlend,
+      trailDecay: prevTgt.trailDecay + (newTgt.trailDecay - prevTgt.trailDecay) * this.stateBlend,
+    }
+    const drift = this._computeDrift()
 
-    const lerp = 0.012
-    this.targets.speed     += (stateTgt.speed     + drift.speed     - this.targets.speed)     * lerp
-    this.targets.chaos     += (stateTgt.chaos     + drift.chaos     - this.targets.chaos)     * lerp
-    this.targets.intensity += (stateTgt.intensity + drift.intensity - this.targets.intensity) * lerp
-    this.targets.trailDecay = stateTgt.trailDecay
-    this.targets.colorShift += (this.colorPhase   - this.targets.colorShift) * 0.005
+    const lerpRate = 0.012
+    this.targets.speed     += (blendedTgt.speed     + drift.speed     - this.targets.speed)     * lerpRate
+    this.targets.chaos     += (blendedTgt.chaos     + drift.chaos     - this.targets.chaos)     * lerpRate
+    this.targets.intensity += (blendedTgt.intensity + drift.intensity - this.targets.intensity) * lerpRate
+    this.targets.trailDecay = blendedTgt.trailDecay
+    this.targets.colorShift += (this.colorPhase     - this.targets.colorShift) * 0.005
 
     const autoBlend = Math.min(this.userIdleTimer / 8.0, 1.0)
 
@@ -164,7 +190,7 @@ export class BehavioralController {
       state:          this.state,
       autoBlend,
       isSilence:      this.silenceTimer > 2,
-      breakIntensity: this._breakModifier(),
+      breakIntensity: this.breakIntensity,
       virtualPulse,
     }
   }

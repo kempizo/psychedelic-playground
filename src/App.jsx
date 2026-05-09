@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import VisualCanvas from './components/VisualCanvas'
 import LandingScreen from './components/LandingScreen'
 import ControlPanel from './components/ControlPanel'
 import ShareButton from './components/ShareButton'
 import PresetPanel from './components/PresetPanel'
+import EnergyIndicator from './components/EnergyIndicator'
+import RecordButton from './components/RecordButton'
+import DiscoveryToast from './components/DiscoveryToast'
 import { useURLState } from './hooks/useURLState'
 import { stopMic } from './audio/mic'
 import { stopFile } from './audio/fileAudio'
@@ -13,6 +16,8 @@ export default function App() {
   const [started, setStarted] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isUIHidden, setIsUIHidden] = useState(false)
+  const canvasRef = useRef(null)
+  const isRecording = useStore(s => s.isRecording)
   useURLState()
 
   const handleReset = () => {
@@ -24,17 +29,26 @@ export default function App() {
   }
 
   const toggleFullscreen = useCallback(() => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {})
+    const el = document.documentElement
+    const isFs = document.fullscreenElement || document.webkitFullscreenElement
+    if (!isFs) {
+      const req = el.requestFullscreen || el.webkitRequestFullscreen
+      req?.call(el)
     } else {
-      document.exitFullscreen().catch(() => {})
+      const exit = document.exitFullscreen || document.webkitExitFullscreen
+      exit?.call(document)
     }
   }, [])
 
   useEffect(() => {
-    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement)
+    const onFsChange = () =>
+      setIsFullscreen(!!(document.fullscreenElement || document.webkitFullscreenElement))
     document.addEventListener('fullscreenchange', onFsChange)
-    return () => document.removeEventListener('fullscreenchange', onFsChange)
+    document.addEventListener('webkitfullscreenchange', onFsChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange)
+      document.removeEventListener('webkitfullscreenchange', onFsChange)
+    }
   }, [])
 
   useEffect(() => {
@@ -49,16 +63,22 @@ export default function App() {
   const uiOpacity = isUIHidden ? 0 : 1
 
   return (
-    <div className="w-full h-full relative">
-      <VisualCanvas />
+    <div
+      className="w-full h-full relative"
+      style={{ cursor: isRecording ? 'none' : undefined }}
+    >
+      <VisualCanvas ref={canvasRef} />
 
       {!started && <LandingScreen onStarted={() => setStarted(true)} />}
 
       {started && (
         <>
-          <ControlPanel onReset={handleReset} isHidden={isUIHidden} />
-          <ShareButton isHidden={isUIHidden} />
-          <PresetPanel isHidden={isUIHidden} />
+          <EnergyIndicator isHidden={isUIHidden} isRecording={isRecording} />
+          <ControlPanel onReset={handleReset} isHidden={isUIHidden || isRecording} />
+          <ShareButton isHidden={isUIHidden || isRecording} />
+          <PresetPanel isHidden={isUIHidden || isRecording} />
+          <RecordButton canvasRef={canvasRef} isHidden={isUIHidden} />
+          <DiscoveryToast />
 
           {/* Fullscreen toggle */}
           <button

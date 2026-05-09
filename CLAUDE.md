@@ -76,25 +76,35 @@ src/
 ├── store/
 │   └── useStore.js            Zustand: audioData + 5 controls + audioSource
 │
+├── behaviors/
+│   └── BehavioralController.js  State machine: calm/build/peak/afterglow, energy, break events
+│
 ├── components/
-│   ├── VisualCanvas.jsx       Mounts canvas, calls hooks
+│   ├── VisualCanvas.jsx       Mounts canvas, calls hooks (forwardRef → exposes canvas to App)
 │   ├── LandingScreen.jsx      Initial CTA overlay (mic/upload)
 │   ├── AudioInput.jsx         Mic permission + file picker
-│   ├── ControlPanel.jsx       4 sliders + Fluid/Radial mode toggle
-│   └── ShareButton.jsx        Serialize state → clipboard
+│   ├── ControlPanel.jsx       4 sliders + mode toggle (5 modes)
+│   ├── ShareButton.jsx        Serialize state → clipboard
+│   ├── EnergyIndicator.jsx    Real-time energy/state display
+│   ├── PresetPanel.jsx        Save/load/mutate named presets
+│   ├── RecordButton.jsx       Canvas → WebM recording (8s / shift+16s)
+│   └── DiscoveryToast.jsx     Gesture unlock notifications (queued, one at a time)
 │
 └── utils/
     ├── shareUtils.js          Serialize/deserialize URL params
-    └── mathUtils.js           lerp, clamp, smoothstep
+    ├── mathUtils.js           lerp, clamp, smoothstep
+    ├── presetUtils.js         Preset CRUD + mutation logic
+    ├── recordUtils.js         canvas.captureStream → MediaRecorder → WebM download
+    └── gestures.js            Mouse ring buffer + circle/figure-8/rapid-click/idle detectors
 ```
 
 ## Audio → visual mapping
 
 | Band | Hz range | Drives |
 |------|----------|--------|
-| `sub` | 0–86 | Slow camera drift magnitude |
-| `bass` | 86–430 | Scale warp, brightness pulse on kick |
-| `mid` | 430–2150 | Domain distortion intensity |
+| `sub` | 0–86 | `uCamDrift` accumulator (slow inertial camera wander) + `uSub` per-frame |
+| `bass` | 86–430 | Scale warp, brightness pulse on kick, pulse spawn |
+| `mid` | 430–2150 | Domain distortion intensity, trail decay |
 | `hi` | 2150–8600 | Fine noise, particle spawn rate, shimmer |
 
 User `Intensity` slider multiplies all bands before they hit the shader.
@@ -103,11 +113,10 @@ User `Intensity` slider multiplies all bands before they hit the shader.
 
 | # | File | Issue |
 |---|------|-------|
-| 1 | `src/shaders/psychedelic.frag` | **Palette red zone**: `tColor = f * 0.5 + 0.5` centers the distribution at `t ≈ 0.5` which maps to red/orange in the cosine palette. Idle shader shows warm tones instead of teal/green. Fix: change to `f * 0.4 + 0.72`. |
-| 2 | `src/hooks/useThreeScene.js` | **Touch events missing**: `uMouse`/`uMouseVel` only update on `mousemove` — mobile users get no distortion stirring. Fix: add `touchmove` handler mapping `touches[0]` to `rawMouse`. |
-| 3 | `src/hooks/useThreeScene.js` | **`THREE.Clock` deprecated**: console warning at startup. Should migrate to `THREE.Timer`. |
-| 4 | `src/audio/fileAudio.js:11,24` | **Lint errors**: two empty `catch {}` blocks trip `no-empty` rule. Add `// ignore` comment or `_e` param. |
-| 5 | `src/components/LandingScreen.jsx:14` | **`duration-600` Tailwind class**: not in the default scale (steps are 500/700). Fade transition may not apply. Use `duration-500` or inline style. |
+| 1 | `src/audio/fileAudio.js:11,24` | **Lint errors**: two empty `catch {}` blocks trip `no-empty` rule. Add `// ignore` comment or `_e` param. |
+| 2 | `src/components/LandingScreen.jsx:14` | **`duration-600` Tailwind class**: not in the default scale (steps are 500/700). Fade transition may not apply. Use `duration-500` or inline style. |
+
+Previously tracked issues now resolved: palette red zone fixed (`t = f * 0.4 + 0.72`), touch events added (`touchmove` → `rawMouse`), `THREE.Clock` migrated to `THREE.Timer`.
 
 ## Plan
 

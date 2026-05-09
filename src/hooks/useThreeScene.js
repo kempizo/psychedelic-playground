@@ -12,6 +12,15 @@ import particleVert from '../shaders/particle.vert?raw'
 import particleFrag from '../shaders/particle.frag?raw'
 import useStore from '../store/useStore'
 import { BehavioralController } from '../behaviors/BehavioralController'
+import {
+  pushMousePos,
+  pushClickTime,
+  detectCircle,
+  detectFigure8,
+  detectRapidClick,
+  detectIdle,
+  resetGestureState,
+} from '../utils/gestures'
 
 const MAX_PARTICLES = 128
 
@@ -59,12 +68,18 @@ export function useThreeScene(canvasRef) {
       uColorSpike:      { value: 0 },
       uDistortionSpike: { value: 0 },
       uMouseDir:        { value: new THREE.Vector2(0, 0) },
+      uEnergy:          { value: 0 },
+      uPaletteFamily:   { value: 0 },
+      uPaletteShift:    { value: 0 },
       uPulseExtra: { value: [
         new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
         new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
         new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
         new THREE.Vector4(0,0,0,0), new THREE.Vector4(0,0,0,0),
       ]},
+      // Slow sub-bass accumulator: integrates sub over time, decays at ~0.997/frame.
+      // Gives the camera a lazy inertial drift that persists through bass-heavy passages.
+      uCamDrift: { value: new THREE.Vector2(0, 0) },
     }
     const mainMat = new THREE.RawShaderMaterial({
       vertexShader: vertSrc,
@@ -91,24 +106,34 @@ export function useThreeScene(canvasRef) {
 
     // ── Particle system ───────────────────────────────────────────────────────
     const particleScene = new THREE.Scene()
-    const positions = new Float32Array(MAX_PARTICLES * 3)
-    const ages      = new Float32Array(MAX_PARTICLES)
-    const lives     = new Float32Array(MAX_PARTICLES)
+    const positions  = new Float32Array(MAX_PARTICLES * 3)
+    const ages       = new Float32Array(MAX_PARTICLES)
+    const lives      = new Float32Array(MAX_PARTICLES)
+    const ptypes     = new Float32Array(MAX_PARTICLES)  // 0=dust 1=spark 2=droplet
+    const pdepths    = new Float32Array(MAX_PARTICLES)
     const velocities = Array.from({ length: MAX_PARTICLES }, () => ({ x: 0, y: 0 }))
 
     // Init all particles as dead
     lives.fill(1)
     ages.fill(999)
+    pdepths.fill(1)
 
     const pGeo = new THREE.BufferGeometry()
     pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    pGeo.setAttribute('aAge', new THREE.BufferAttribute(ages, 1))
-    pGeo.setAttribute('aLife', new THREE.BufferAttribute(lives, 1))
+    pGeo.setAttribute('aAge',     new THREE.BufferAttribute(ages, 1))
+    pGeo.setAttribute('aLife',    new THREE.BufferAttribute(lives, 1))
+    pGeo.setAttribute('aType',    new THREE.BufferAttribute(ptypes, 1))
+    pGeo.setAttribute('aDepth',   new THREE.BufferAttribute(pdepths, 1))
 
     const pMat = new THREE.ShaderMaterial({
       vertexShader: particleVert,
       fragmentShader: particleFrag,
-      uniforms: { uPixelRatio: { value: renderer.getPixelRatio() } },
+      uniforms: {
+        uPixelRatio:    { value: renderer.getPixelRatio() },
+        uPaletteFamily: { value: 0 },
+        uPaletteShift:  { value: 0 },
+        uEnergy:        { value: 0 },
+      },
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
@@ -160,6 +185,7 @@ export function useThreeScene(canvasRef) {
     const onMouseMove = (e) => {
       rawMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1
       rawMouse.y = -((e.clientY / window.innerHeight) * 2 - 1)
+      pushMousePos(rawMouse.x, rawMouse.y)
       resetCursorTimer()
     }
     window.addEventListener('mousemove', onMouseMove)
@@ -230,14 +256,17 @@ export function useThreeScene(canvasRef) {
       p.typeIndex = type === 'click' ? 0 : type === 'bass' ? 1 : type === 'hold' ? 2 : 3
     }
 
-    const spawnParticle = (px, py, vx, vy, life) => {
+    // type: 0=dust, 1=spark, 2=droplet
+    const spawnParticle = (px, py, vx, vy, life, type = 1, depth = null) => {
       for (let i = 0; i < MAX_PARTICLES; i++) {
         if (ages[i] < lives[i]) continue
         positions[i * 3]     = px
         positions[i * 3 + 1] = py
         positions[i * 3 + 2] = 0
-        ages[i]  = 0
-        lives[i] = life
+        ages[i]   = 0
+        lives[i]  = life
+        ptypes[i] = type
+        pdepths[i]= depth !== null ? depth : 0.4 + Math.random() * 0.6
         // Nearest active pulse ring within 0.15 NDC boosts velocity outward
         for (let k = 0; k < MAX_PULSES; k++) {
           const pk = pulses[k]
@@ -260,7 +289,9 @@ export function useThreeScene(canvasRef) {
     const onMouseDown = (e) => {
       const x = (e.clientX / window.innerWidth)  * 2 - 1
       const y = -((e.clientY / window.innerHeight) * 2 - 1)
+      pushClickTime(performance.now())
       spawnPulse(x, y, 0.85, 0.7, 'click', 0)
+      controller.injectEnergy(0.05)
       isHolding = true
       holdStartTime = timer.getElapsed()
       lastHoldSpawn = holdStartTime
@@ -294,15 +325,25 @@ export function useThreeScene(canvasRef) {
     // Smoothed control values — lerped toward behavioral targets each frame.
     const { speed: s0, intensity: i0, colorShift: c0, chaos: ch0 } = useStore.getState()
     const smoothed = { speed: s0, intensity: i0, colorShift: c0, chaos: ch0, breakSpike: 0 }
-    const LERP = 0.05
 
     let prevSpeed = s0, prevIntensity = i0, prevColorShift = c0, prevChaos = ch0
+    let frameCount = 0
+    let prevBehavioralState = 'calm'
+    let breakEventPulseTimer = -999
+    // uCamDrift accumulator: slowly integrates sub-bass, decays at 0.997/frame
+    const camDrift = new THREE.Vector2(0, 0)
+
+    const smoothstep05 = (x, edge0, edge1) => {
+      const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)))
+      return t * t * (3 - 2 * t)
+    }
 
     const tick = () => {
       rafId = requestAnimationFrame(tick)
       timer.update()
       const elapsed = timer.getElapsed()
-      const dt = timer.getDelta()
+      // Clamp dt to prevent single-frame spikes (tab refocus, hitching)
+      const dt = Math.min(timer.getDelta(), 1 / 30)
 
       for (let i = 0; i < MAX_PULSES; i++) {
         const p = pulses[i]
@@ -334,6 +375,7 @@ export function useThreeScene(canvasRef) {
             }
             mainUniforms.uColorSpike.value      = Math.min(1.0, mainUniforms.uColorSpike.value      + 0.4)
             mainUniforms.uDistortionSpike.value = Math.min(1.0, mainUniforms.uDistortionSpike.value + 0.5)
+            controller.injectEnergy(0.04)
           }
         }
       }
@@ -348,6 +390,7 @@ export function useThreeScene(canvasRef) {
           blobBurstPending += 8 + Math.floor(Math.random() * 5)
           mainUniforms.uColorSpike.value      = Math.min(1.0, mainUniforms.uColorSpike.value      + 0.3)
           mainUniforms.uDistortionSpike.value = Math.min(1.0, mainUniforms.uDistortionSpike.value + 0.6)
+          controller.injectEnergy(0.06)
         }
       }
 
@@ -366,10 +409,12 @@ export function useThreeScene(canvasRef) {
       // Behavioral controller: blends user controls with state-machine targets
       const bOut = controller.tick(audioData, dt, { speed, intensity, colorShift, chaos })
 
-      smoothed.speed      += (bOut.speed      - smoothed.speed)      * LERP
-      smoothed.intensity  += (bOut.intensity  - smoothed.intensity)  * LERP
-      smoothed.colorShift += (bOut.colorShift - smoothed.colorShift) * LERP
-      smoothed.chaos      += (bOut.chaos      - smoothed.chaos)      * LERP
+      // Exponential easing: tau=0.25s gives smooth response without snapiness
+      const lerpCtrl = 1 - Math.exp(-dt / 0.25)
+      smoothed.speed      += (bOut.speed      - smoothed.speed)      * lerpCtrl
+      smoothed.intensity  += (bOut.intensity  - smoothed.intensity)  * lerpCtrl
+      smoothed.colorShift += (bOut.colorShift - smoothed.colorShift) * lerpCtrl
+      smoothed.chaos      += (bOut.chaos      - smoothed.chaos)      * lerpCtrl
 
       // Bass auto-spawn: rising edge with 0.3s cooldown
       const curBass = audioData.bass
@@ -380,6 +425,7 @@ export function useThreeScene(canvasRef) {
         const jy = (Math.random() - 0.5) * 0.1 + mouseDirSmooth.y * 0.08
         spawnPulse(jx, jy, energy, spd, 'bass', 0)
         lastBassSpawn = elapsed
+        controller.injectEnergy(0.03)
       }
       lastBass = curBass
 
@@ -388,6 +434,33 @@ export function useThreeScene(canvasRef) {
         spawnPulse(rawMouse.x, rawMouse.y, 0.45, 0.7, 'hold', 0)
         lastHoldSpawn = elapsed
       }
+
+      // Push energy snapshot to store at ~20 Hz (every 3 frames) to avoid 60fps React updates
+      frameCount++
+      if (frameCount % 3 === 0) {
+        useStore.getState().setEnergySnapshot({
+          energy: bOut.state === 'peak' ? 1.0 : controller.energy,
+          state: bOut.state,
+          breakIntensity: bOut.breakIntensity,
+        })
+      }
+
+      // Break event: detect peak→afterglow with high breakIntensity
+      const isBreak = bOut.state === 'afterglow' &&
+                      prevBehavioralState === 'peak' &&
+                      bOut.breakIntensity > 0.7 &&
+                      (elapsed - breakEventPulseTimer) > 2.0
+
+      if (isBreak) {
+        breakEventPulseTimer = elapsed
+        mainUniforms.uColorSpike.value = Math.min(1.0, mainUniforms.uColorSpike.value + 1.0)
+        mainUniforms.uDistortionSpike.value = Math.min(1.2, mainUniforms.uDistortionSpike.value + 1.2)
+        // 3 staggered pulses: direct, +80ms, +160ms — one buildup arc, not three events
+        spawnPulse((Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6, 0.8, 0.65, 'chain', 0)
+        setTimeout(() => spawnPulse((Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6, 0.65, 0.55, 'chain', 0), 80)
+        setTimeout(() => spawnPulse((Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6, 0.5, 0.45, 'chain', 0), 160)
+      }
+      prevBehavioralState = bOut.state
 
       // Auto-mode: virtual pulses from behavioral controller
       if (bOut.virtualPulse) {
@@ -408,8 +481,9 @@ export function useThreeScene(canvasRef) {
         mouseDirSmooth.y /= sl
       }
       prevRawMouse.copy(rawMouse)
-      smoothedMouse.x += (rawMouse.x - smoothedMouse.x) * 0.04
-      smoothedMouse.y += (rawMouse.y - smoothedMouse.y) * 0.04
+      const lerpMouse = 1 - Math.exp(-dt / 0.12)
+      smoothedMouse.x += (rawMouse.x - smoothedMouse.x) * lerpMouse
+      smoothedMouse.y += (rawMouse.y - smoothedMouse.y) * lerpMouse
       const aspect = window.innerWidth / window.innerHeight
 
       // Non-linear audio curves: quiet → subtle; peaks → strong reactions
@@ -417,6 +491,14 @@ export function useThreeScene(canvasRef) {
       const midNL  = Math.pow(Math.max(0, audioData.mid),  0.80) * 1.2
       const hiNL   = audioData.hi * audioData.hi * 2.5
       const subNL  = Math.pow(Math.max(0, audioData.sub),  0.70) * 1.1
+
+      // Camera drift accumulator: integrate sub-bass into a slow-decaying 2D offset.
+      // The oscillating accumulation directions ensure the drift wanders rather than
+      // converging on a fixed axis.
+      const driftScale = subNL * smoothed.intensity * 0.0015
+      camDrift.x = camDrift.x * 0.9975 + Math.sin(elapsed * 0.17) * driftScale
+      camDrift.y = camDrift.y * 0.9975 + Math.cos(elapsed * 0.13) * driftScale
+      mainUniforms.uCamDrift.value.copy(camDrift)
 
       // Update main uniforms
       mainUniforms.uTime.value       = elapsed
@@ -442,6 +524,19 @@ export function useThreeScene(canvasRef) {
           mainUniforms.uPulseExtra.value[i].set(0, 0, 0, 0)
         }
       }
+      mainUniforms.uEnergy.value     = controller.energy
+
+      // Palette family: modes 0-1 = teal/green/violet, modes 2-4 = pink/purple/violet
+      const paletteFamily = mode >= 2 ? 1 : 0
+      mainUniforms.uPaletteFamily.value = paletteFamily
+      // uPaletteShift: break events temporarily push any mode toward pink palette
+      const targetShift = Math.max(0, Math.min(1, smoothstep05(bOut.breakIntensity, 0.5, 1.0)))
+      mainUniforms.uPaletteShift.value  += (targetShift - mainUniforms.uPaletteShift.value) * 0.06
+      // Sync particle shader palette
+      pMat.uniforms.uPaletteFamily.value = paletteFamily
+      pMat.uniforms.uPaletteShift.value  = mainUniforms.uPaletteShift.value
+      pMat.uniforms.uEnergy.value        = controller.energy
+
       mainUniforms.uColorSpike.value = Math.max(0, mainUniforms.uColorSpike.value * 0.951)
 
       // Break-event distortion spike blended with collision spike (take max)
@@ -458,8 +553,10 @@ export function useThreeScene(canvasRef) {
         combinedBoost
       )
 
-      // State-driven trail decay (behavioral) + mode + bass modulation
-      const baseDecay = bOut.trailDecay ?? (mode === 1 ? 0.88 : 0.84)
+      // State-driven trail decay: per-mode defaults blended with behavioral target
+      const modeDecayDefaults = [0.84, 0.84, 0.86, 0.90, 0.82]
+      const modeDecay = modeDecayDefaults[mode] ?? 0.84
+      const baseDecay = bOut.trailDecay ?? modeDecay
       const minDecay  = baseDecay - 0.04
       trailUniforms.uDecay.value = Math.max(minDecay, baseDecay - mainUniforms.uBass.value * 0.04)
 
@@ -485,24 +582,57 @@ export function useThreeScene(canvasRef) {
       renderer.setRenderTarget(null)
       renderer.render(finalScene, camera)
 
-      // Particle spawn on treble
+      // Particle spawn on treble — per-mode behavior
       const hiVal = audioData.hi * smoothed.intensity
       const spawnRate = hiVal * 4
       if (hiVal > lastHi * 0.85 && hiVal > 0.15) {
         const spawns = Math.floor(spawnRate)
         for (let s = 0; s < spawns; s++) {
-          spawnParticle(
-            Math.random() * 2 - 1,
-            Math.random() * 2 - 1,
-            (Math.random() - 0.5) * 0.004,
-            (Math.random() - 0.5) * 0.004 + 0.001,
-            1.5 + Math.random() * 1.5,
-          )
+          const depth = 0.4 + Math.random() * 0.6
+          if (mode === 2) {
+            // Vortex: spawn tangentially around a ring, orbit outward
+            const angle = Math.random() * Math.PI * 2
+            const r = 0.3 + Math.random() * 0.5
+            const tangX = -Math.sin(angle) * 0.005 * (1 + hiVal)
+            const tangY =  Math.cos(angle) * 0.005 * (1 + hiVal)
+            spawnParticle(Math.cos(angle) * r, Math.sin(angle) * r,
+              tangX, tangY, 1.5 + Math.random() * 1.5, 1, depth)
+          } else if (mode === 3) {
+            // Collapse: spawn near edges, fall toward center (droplet type)
+            const angle = Math.random() * Math.PI * 2
+            const r = 0.6 + Math.random() * 0.4
+            const cx = Math.cos(angle) * r, cy = Math.sin(angle) * r
+            const n = Math.sqrt(cx * cx + cy * cy) || 1
+            spawnParticle(cx, cy, -cx / n * 0.004, -cy / n * 0.004,
+              1.5 + Math.random() * 1.5, 2, depth)
+          } else if (mode === 4) {
+            // Orbit: spawn near the three seam regions (120° intervals)
+            const seam = Math.floor(Math.random() * 3) * (Math.PI * 2 / 3)
+            const angle = seam + (Math.random() - 0.5) * 0.6
+            const r = 0.25 + Math.random() * 0.15
+            spawnParticle(Math.cos(angle) * r, Math.sin(angle) * r,
+              (Math.random() - 0.5) * 0.004, (Math.random() - 0.5) * 0.004 + 0.001,
+              1.5 + Math.random() * 1.5, 1, depth)
+          } else {
+            // Fluid / Radial: ambient dust
+            spawnParticle(
+              Math.random() * 2 - 1, Math.random() * 2 - 1,
+              (Math.random() - 0.5) * 0.004, (Math.random() - 0.5) * 0.004 + 0.001,
+              1.5 + Math.random() * 1.5, 0, depth)
+          }
         }
       }
       lastHi = hiVal
 
-      // Blob-collision burst: particles ejected radially from blob surface
+      // Ambient idle dust (1 particle/sec max) — keeps life visible at silence
+      if (bOut.state === 'calm' && Math.random() < dt * 1.0) {
+        spawnParticle(
+          Math.random() * 2 - 1, Math.random() * 2 - 1,
+          (Math.random() - 0.5) * 0.002, (Math.random() - 0.5) * 0.002,
+          3.0 + Math.random() * 2.0, 0, 0.3 + Math.random() * 0.3)
+      }
+
+      // Blob-collision burst: spark particles ejected radially from blob surface
       if (blobBurstPending > 0) {
         const count = blobBurstPending
         blobBurstPending = 0
@@ -511,12 +641,9 @@ export function useThreeScene(canvasRef) {
           const r     = 0.30 + Math.random() * 0.10
           const spd   = 0.005 + Math.random() * 0.005
           spawnParticle(
-            Math.cos(angle) * r,
-            Math.sin(angle) * r,
-            Math.cos(angle) * spd,
-            Math.sin(angle) * spd,
-            1.0 + Math.random() * 1.0,
-          )
+            Math.cos(angle) * r, Math.sin(angle) * r,
+            Math.cos(angle) * spd, Math.sin(angle) * spd,
+            1.0 + Math.random() * 1.0, 1, 0.5 + Math.random() * 0.5)
         }
       }
 
@@ -532,10 +659,59 @@ export function useThreeScene(canvasRef) {
       }
       pGeo.attributes.position.needsUpdate = true
       pGeo.attributes.aAge.needsUpdate     = true
+      pGeo.attributes.aType.needsUpdate    = true
+      pGeo.attributes.aDepth.needsUpdate   = true
 
       renderer.autoClear = false
       renderer.render(particleScene, particleCamera)
       renderer.autoClear = true
+
+      // ── Gesture detection (~10 Hz: every 6 frames) ─────────────────────────
+      if (frameCount % 6 === 0) {
+        const nowMs = performance.now()
+        const { addDiscovery, discoveries } = useStore.getState()
+
+        if (!discoveries.includes('circle') && detectCircle(nowMs)) {
+          addDiscovery('circle')
+          // Color spike + a ring of chain pulses
+          mainUniforms.uColorSpike.value = Math.min(1.0, mainUniforms.uColorSpike.value + 0.7)
+          mainUniforms.uDistortionSpike.value = Math.min(1.2, mainUniforms.uDistortionSpike.value + 0.5)
+          const angles = [0, Math.PI * 0.66, Math.PI * 1.33]
+          angles.forEach((a, i) => setTimeout(() => {
+            spawnPulse(Math.cos(a) * 0.4, Math.sin(a) * 0.4, 0.7, 0.6, 'chain', 0)
+          }, i * 60))
+          controller.injectEnergy(0.12)
+        }
+
+        if (!discoveries.includes('figure8') && detectFigure8(nowMs)) {
+          addDiscovery('figure8')
+          // Palette shift spike
+          mainUniforms.uColorSpike.value = Math.min(1.0, mainUniforms.uColorSpike.value + 1.0)
+          mainUniforms.uPaletteShift.value = Math.min(1.0, mainUniforms.uPaletteShift.value + 0.8)
+          spawnPulse(0, 0, 0.9, 0.5, 'chain', 0)
+          controller.injectEnergy(0.15)
+        }
+
+        if (!discoveries.includes('rapidClick') && detectRapidClick(nowMs)) {
+          addDiscovery('rapidClick')
+          // Distortion storm: 5 rapid pulses from center
+          for (let k = 0; k < 5; k++) {
+            setTimeout(() => spawnPulse(
+              (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.2,
+              0.75, 0.8, 'click', 0
+            ), k * 40)
+          }
+          mainUniforms.uDistortionSpike.value = Math.min(1.2, mainUniforms.uDistortionSpike.value + 1.0)
+          controller.injectEnergy(0.18)
+        }
+
+        if (!discoveries.includes('idle') && detectIdle(nowMs)) {
+          addDiscovery('idle')
+          // Gentle color drift, no distortion
+          mainUniforms.uColorSpike.value = Math.min(0.5, mainUniforms.uColorSpike.value + 0.3)
+          controller.injectEnergy(-0.05)  // nudge energy down — invite calm
+        }
+      }
 
       // Ping-pong swap: trailWrite becomes trailRead next frame
       const tmp = trailRead; trailRead = trailWrite; trailWrite = tmp
@@ -546,6 +722,7 @@ export function useThreeScene(canvasRef) {
     cleanupRef.current = () => {
       cancelAnimationFrame(rafId)
       clearTimeout(cursorHideTimer)
+      resetGestureState()
       window.removeEventListener('resize', onResize)
       window.removeEventListener('mousemove', onMouseMove)
       canvasRef.current?.removeEventListener('mousedown', onMouseDown)

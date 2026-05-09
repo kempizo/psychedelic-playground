@@ -16,6 +16,17 @@ const useStore = create((set, get) => ({
   audioSource: null,   // 'mic' | 'file' | null
   isPlaying: false,
 
+  // Energy system — promoted from BehavioralController each tick (≤30 Hz)
+  energy: 0,
+  behavioralState: 'calm',
+  breakIntensity: 0,
+
+  // Phase 6: gesture discoveries
+  discoveries: [],
+
+  // Phase 5: recording
+  isRecording: false,
+
   // Preset system — loaded from localStorage on init
   presets: loadPresets(),
   activePresetId: null,
@@ -24,6 +35,12 @@ const useStore = create((set, get) => ({
   setControl: (key, value) => set({ [key]: value }),
   setAudioSource: (source) => set({ audioSource: source }),
   setIsPlaying: (v) => set({ isPlaying: v }),
+  setEnergySnapshot: ({ energy, state, breakIntensity }) =>
+    set({ energy, behavioralState: state, breakIntensity }),
+  addDiscovery: (key) => set(s => ({
+    discoveries: s.discoveries.includes(key) ? s.discoveries : [...s.discoveries, key]
+  })),
+  setIsRecording: (v) => set({ isRecording: v }),
 
   savePreset: () => {
     const { speed, intensity, colorShift, chaos, mode } = get()

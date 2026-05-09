@@ -13,11 +13,18 @@ function avgRange(data, start, end) {
   return sum / len / 255  // normalize 0–1
 }
 
+const FLOOR = 0.05
+
+function applyFloorAndCurve(v) {
+  const floored = Math.max(0, v - FLOOR)
+  return Math.pow(floored, 1.4)
+}
+
 export function extractBands(dataArray) {
   return {
-    sub:  avgRange(dataArray, ...RANGES.sub),
-    bass: avgRange(dataArray, ...RANGES.bass),
-    mid:  avgRange(dataArray, ...RANGES.mid),
-    hi:   avgRange(dataArray, ...RANGES.hi),
+    sub:  applyFloorAndCurve(avgRange(dataArray, ...RANGES.sub)),
+    bass: applyFloorAndCurve(avgRange(dataArray, ...RANGES.bass)),
+    mid:  applyFloorAndCurve(avgRange(dataArray, ...RANGES.mid)),
+    hi:   applyFloorAndCurve(avgRange(dataArray, ...RANGES.hi)),
   }
 }

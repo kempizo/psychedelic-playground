@@ -7,6 +7,8 @@ const CONTROLS = [
   { key: 'chaos',      label: 'Chaos',       min: 0,    max: 1,   step: 0.01 },
 ]
 
+const MODES = ['Fluid', 'Radial', 'Vortex', 'Collapse', 'Orbit']
+
 export default function ControlPanel({ onReset, isHidden }) {
   const { speed, intensity, colorShift, chaos, mode, setControl } = useStore()
 
@@ -53,26 +55,35 @@ export default function ControlPanel({ onReset, isHidden }) {
           </div>
         ))}
 
-        {/* Mode toggle */}
+        {/* Mode pill group — 5 modes, wraps on narrow widths */}
         <div className="flex items-center gap-4 pt-1">
           <span className="text-xs font-mono w-20 shrink-0" style={{ color: 'rgba(0,220,180,0.75)' }}>
             Mode
           </span>
-          <div className="flex gap-2">
-            {['Fluid', 'Radial'].map((label, i) => (
-              <button
-                key={i}
-                onClick={() => setControl('mode', i)}
-                className="px-3 py-1 rounded-full text-xs font-mono transition-all"
-                style={{
-                  background: mode === i ? 'rgba(0,200,160,0.25)' : 'transparent',
-                  border: `1px solid ${mode === i ? 'rgba(0,200,160,0.6)' : 'rgba(0,200,160,0.15)'}`,
-                  color: mode === i ? 'rgba(0,220,180,1)' : 'rgba(0,220,180,0.4)',
-                }}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="flex flex-wrap gap-1.5">
+            {MODES.map((label, i) => {
+              const isPink = i >= 2
+              const isActive = mode === i
+              const activeColor = isPink ? 'rgba(200,60,255,0.9)' : 'rgba(0,220,180,1)'
+              const activeBg    = isPink ? 'rgba(180,40,220,0.22)' : 'rgba(0,200,160,0.22)'
+              const activeBorder= isPink ? 'rgba(180,40,220,0.65)' : 'rgba(0,200,160,0.65)'
+              const idleColor   = isPink ? 'rgba(200,60,255,0.35)' : 'rgba(0,220,180,0.35)'
+              const idleBorder  = isPink ? 'rgba(180,40,220,0.15)' : 'rgba(0,200,160,0.15)'
+              return (
+                <button
+                  key={i}
+                  onClick={() => setControl('mode', i)}
+                  className="px-3 py-1 rounded-full text-xs font-mono transition-all"
+                  style={{
+                    background: isActive ? activeBg : 'transparent',
+                    border: `1px solid ${isActive ? activeBorder : idleBorder}`,
+                    color: isActive ? activeColor : idleColor,
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
           </div>
         </div>
       </div>
