@@ -10,26 +10,26 @@ paths:
 - Every fragment shader paired with `RawShaderMaterial` MUST start with `precision highp float;` — `RawShaderMaterial` injects nothing.
 - `ShaderMaterial` (used for particles) auto-injects precision and built-in uniforms (`modelViewMatrix`, `projectionMatrix`, `position`, `uv`). Don't redeclare.
 
-## Color palette — dual family system
-The look is "organic consciousness engine". Two palette families exist; do not introduce a third.
+## Color palette — open neon family phase
+The look is "organic consciousness engine": an open cyan → violet → magenta → acid-green spectrum. Do not introduce a second visual palette system or a full rainbow gradient.
 
-**Family 0 — default** (teal → acid green → deep violet, near-black base):
+The snapped semantic family is still `uPaletteFamily`:
+
+- Modes 0–1 target family `0`
+- Modes 2–4 target family `1`
+
+The shader palette uses `uPaletteFamilyBlend`, a float eased in `useThreeScene.js`, so switching across the family boundary does not hard-jump the hue phase. `uPaletteFamily` remains available as the discrete mode-family contract and must stay an `int`.
+
+Current palette shape:
 ```glsl
-vec3 a = vec3(0.05, 0.08, 0.10);
-vec3 b = vec3(0.38, 0.48, 0.28);
-vec3 c = vec3(1.00, 0.80, 1.20);
-vec3 d = vec3(0.45, 0.25, 0.65);
+vec3 a = vec3(0.50, 0.45, 0.55);
+vec3 b = vec3(0.50, 0.50, 0.50);
+vec3 c = vec3(1.00, 1.00, 0.50);
+vec3 d = vec3(0.00, 0.33, 0.67);
+float phaseOffset = uPaletteFamilyBlend * 0.33 + uPaletteShift * 0.20;
 ```
 
-**Family 1 — break/pink** (deep purple → electric violet → neon pink, triggered by break events):
-```glsl
-vec3 a = vec3(0.10, 0.04, 0.14);
-vec3 b = vec3(0.55, 0.20, 0.45);
-vec3 c = vec3(1.10, 0.70, 1.20);
-vec3 d = vec3(0.95, 0.10, 0.55);
-```
-
-The blend is controlled by `uPaletteFamily` (0 or 1, set by mode >= 2) and `uPaletteShift` (0–1 float, pushed by break events). The final `palette(t)` call in the shader mixes both families based on these. Never touch the `a/b/c/d` vectors without understanding how the full `t` distribution maps across the cosine. The palette bias is `t = value * 0.4 + 0.72` (centers on acid-green, avoids the red zone at t≈0.5).
+`uPaletteShift` is still a transient break/drift offset. Never touch the `a/b/c/d` vectors or phase multipliers without checking the full `t` distribution across surface, fog, particles, force glow, and shimmer.
 
 Do not introduce: full rainbow gradients, warm hues (red/orange), high-contrast strobing.
 
@@ -48,13 +48,22 @@ GLSL fails silently on type mismatch. The setup:
 | Uniform | GLSL type | JS value type |
 |---------|-----------|---------------|
 | `uTime`, `uBass`, `uMid`, `uHi`, `uSub`, `uSpeed`, `uIntensity`, `uColorShift`, `uChaos` | `float` | JS `number` |
-| `uMouseVel`, `uColorSpike`, `uDistortionSpike`, `uEnergy`, `uPaletteShift` | `float` | JS `number` |
+| `uMouseVel`, `uColorSpike`, `uDistortionSpike`, `uEnergy`, `uPaletteShift`, `uPaletteFamilyBlend` | `float` | JS `number` |
 | `uMode`, `uPaletteFamily` | `int` | JS integer (no decimals) |
 | `uResolution`, `uMouse`, `uMouseDir`, `uCamDrift` | `vec2` | `THREE.Vector2` |
-| `uPulses`, `uPulseExtra` | `vec4[8]` | `THREE.Vector4[]` |
+| `uForces` | `vec4[8]` | `THREE.Vector4[]` — `xy=origin, z=strength (signed), w=age0to1` |
+| `uForceMeta` | `vec4[8]` | `THREE.Vector4[]` — `xy=velocity, z=radius, w=unused` |
 | `uCurrent`, `uPrev` | `sampler2D` | `THREE.Texture` |
 
 When adding a uniform, declare it in BOTH the frag shader AND the `mainUniforms` object in `useThreeScene.js`. The render loop must update it each frame.
+
+## Force field — no rings policy
+Clicks, drags, bass kicks, and gestures all spawn **forces** (not rings). A force is a Gaussian-falloff field disturbance: `falloff = exp(-d²/r²)`. Forces are invisible by themselves — only their distortion of the FBM domain is visible. Do NOT add visible ring SDFs or overlaid geometric shapes. `uForces` / `uForceMeta` replace the removed `uPulses` / `uPulseExtra` uniforms.
+
+- Positive `strength` → push (warp outward from origin)
+- Negative `strength` → pull (warp inward)
+- `tau` defaults to 0.6s; drag-painting uses short tau ≈ 0.12s
+- Spawn via `spawnForce(x, y, strength, sign, radius, tau)` in `useThreeScene.js`
 
 ## Adding a new shader effect
 1. Add the GLSL code to `psychedelic.frag` — use existing `fbm()`, `noise()`, `palette()` helpers.
@@ -72,7 +81,14 @@ There are 5 SDF ray-march modes (0–4). Do not add a 6th without removing one f
 | 3 | Collapse | Camera pulses inward on bass, outward on mid |
 | 4 | Orbit | Three-blob SDF (`sdfOrbit`), particles spawn at 120° seam regions |
 
-Modes 0–1 use palette family 0 (teal/green/violet). Modes 2–4 use palette family 1 (pink/violet) via `uPaletteFamily`.
+Modes 0–1 target palette family 0. Modes 2–4 target palette family 1 via `uPaletteFamily`. The visible palette phase must transition through `uPaletteFamilyBlend`, not by snapping shader color directly on the mode boundary.
+
+Mode changes are intentionally still discrete in UI/store state. Visual continuity is maintained locally in `useThreeScene.js` with:
+
+- dt-based `modeTransition` easing
+- smoothed `uPaletteFamilyBlend`
+- temporary trail-decay hold during transitions
+- probabilistic previous/current particle spawn styles during transitions
 
 ## Performance budget
 Target 60 fps on M1 / mid-range desktop GPU. Red flags:
@@ -81,7 +97,7 @@ Target 60 fps on M1 / mid-range desktop GPU. Red flags:
 - Branching on `uMode` inside FBM loops (move branches outside)
 
 ## Trail / feedback shader
-`trail.frag` blends current and previous frames: `mix(current, prev, uDecay)`. `uDecay` is now driven dynamically from `useThreeScene.js` each frame: `0.84 − uBass * 0.04`, clamped to [0.80, 0.84]. Quiet = more persistence (0.84); bass hit = faster clear (0.80). Never go above 0.9 (excessive smearing) or below 0.7 (kills persistence).
+`trail.frag` blends current and previous frames: `mix(current, prev, uDecay)`. `uDecay` is driven dynamically from `useThreeScene.js` each frame from behavioral/mode defaults, bass clearing, and a short transition hold. Quiet = more persistence; bass hit = faster clear; mode switch = temporarily stronger hold so old frames fade into the new mode instead of exposing a hard shader jump. Never go above 0.94 (excessive smearing) or below 0.7 (kills persistence).
 
 ## uCamDrift — slow camera drift accumulator
 `uCamDrift` (vec2) is a per-session accumulator driven by sub-bass. It integrates `subNL * intensity * 0.0015` each frame using oscillating sin/cos directions so the drift wanders rather than locking to a fixed axis. Decays at `0.9975` per frame (~30s half-life). Applied as a `ro.xz` offset in all 5 camera modes. Do not drive it faster than the existing sub-band — it would stutter on kicks.
@@ -90,3 +106,11 @@ Target 60 fps on M1 / mid-range desktop GPU. Red flags:
 - **Black screen**: usually a precision missing, or `uMode` was passed as float instead of int.
 - **Banding**: increase `b` palette vector slightly, or add a tiny dither in the final pass.
 - **Particles invisible**: check `gl.POINTS` is supported, `gl_PointSize` is at least 1.0, and additive blending is enabled on the material.
+
+## Visual iteration loop (execute mode only)
+After any visual change, run this loop before reporting the task done:
+
+1. Ensure `npm run dev` is running. Ask the user to capture three screenshots: **calm** (no audio, blob idling), **mid** (music at moderate volume), **peak** (bass-heavy moment). Save as `screenshots/calm.png`, `screenshots/mid.png`, `screenshots/peak.png`.
+2. Read all three via the Read tool and evaluate against: **motion smoothness**, **depth** (front-to-back separation), **cohesion** (field + particles feel like one system), **visual noise** (clutter, banding, strobing), **evolution** (slow drift, variety over time).
+3. If a screenshot shows a defect, make ONE corrective change and re-loop. Do not stack untested changes.
+4. This loop is execute-mode only — plan mode cannot run the dev server.

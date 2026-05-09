@@ -12,31 +12,36 @@ paths:
 Each `tick()` call in `useThreeScene.js` does this:
 
 ```
-Pass 1 (offscreen):  scene → renderTarget A      [main shader]
-Pass 2 (offscreen):  trailScene → renderTarget B [blends A with previous B]
-Pass 3 (screen):     finalScene → null            [draws B to canvas]
-Particles:           particleScene → null          [autoClear=false, additive]
-Swap A/B for next frame
+Pass 1 (offscreen):  scene → rtA                  [fresh main shader]
+Pass 2 (offscreen):  trailScene → trailWrite      [blends rtA with trailRead]
+Pass 3 (screen):     finalScene → null            [draws trailWrite to canvas]
+Particles:           particleScene → null         [autoClear=false, additive]
+Swap trailRead/trailWrite for next frame
 ```
 
 Don't reorder these. Don't merge passes. The trail blend MUST happen between A and screen output, otherwise particles get included in the trail and smear into solid color over time.
 
 ## Ping-pong render targets
 
-Two `WebGLRenderTarget`s in a swap. The pattern:
+The current pipeline uses three `WebGLRenderTarget`s:
+
+- `rtA`: fresh main shader output each frame
+- `rtB` / `rtC`: ping-pong trail accumulation
+
+The trail pattern:
 
 ```js
-let current = rtA
-let prev    = rtB
+let trailRead  = rtB
+let trailWrite = rtC
 // ...render...
-const tmp = current; current = prev; prev = tmp
+const tmp = trailRead; trailRead = trailWrite; trailWrite = tmp
 ```
 
-If you add a new pass that needs the previous frame, sample from `prev.texture` BEFORE the swap. If you need the result of the new pass next frame, write to a new render target you ping-pong yourself (do not reuse A/B for unrelated effects).
+If you add a new pass that needs the previous trail frame, sample from `trailRead.texture` BEFORE the swap. Never sample from and write to the same render target in one pass; WebGL feedback loops can fail or render stale data.
 
 ## Resize handling
 
-Both render targets must resize on viewport change. `resizeRenderer(renderer, [rtA, rtB])` handles this. If you add new render targets, add them to that array too. Forgetting causes blurry/stretched output after a resize.
+All render targets must resize on viewport change. `resizeRenderer(renderer, [rtA, rtB, rtC])` handles this. If you add new render targets, add them to that array too. Forgetting causes blurry/stretched output after a resize.
 
 ## Camera
 
@@ -47,6 +52,7 @@ Single `OrthographicCamera(-1, 1, 1, -1, 0, 1)` shared across all three passes. 
 - Max 128 particles, fixed buffer.
 - Stored as `Float32Array`s for `position`, `aAge`, `aLife`. Updated on CPU each frame.
 - Spawn check: rising edge of `hi` band (`hiVal > lastHi * 0.85 && hiVal > 0.15`).
+- During mode transitions, spawn style is probabilistically blended between the previous mode and current mode using the render-loop-local `modeTransition`.
 - Render: `THREE.Points` with `ShaderMaterial` (NOT `RawShaderMaterial`), additive blending, no depth write.
 - Particle x-position kept in `[-1, 1]` to match orthographic camera bounds. If you want full-width spread accounting for aspect ratio, update the camera bounds, not the positions.
 
@@ -71,7 +77,9 @@ Particles render after the final pass with `renderer.autoClear = false` to avoid
 
 ## Clock and timing
 
-`THREE.Clock` is created in the closure. Use `clock.getElapsedTime()` for the `uTime` uniform. Don't call `clock.getDelta()` — it has confusing semantics (resets on call) and we use a fixed 1/60 timestep for particle ages.
+`THREE.Timer` is created in the closure. Use `timer.getElapsed()` for the `uTime` uniform and clamp `timer.getDelta()` before dt-based easing to avoid tab-refocus spikes. Particle ages still advance with the existing fixed `1 / 60` step.
+
+Mode transition, palette-family transition, palette shift, and trail-decay smoothing should use exponential easing based on `dt`, not fixed per-frame constants.
 
 ## Adding a new effect post-pipeline
 

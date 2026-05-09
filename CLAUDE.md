@@ -31,15 +31,17 @@ These are non-obvious and break things if violated. Path-scoped details live in 
 
 2. **Shaders are loaded as raw strings via `?raw`.** Never inline GLSL in JS unless trivially small (the final-pass passthrough shader is the only exception). Edit the `.vert`/`.frag` files directly.
 
-3. **Color palette is fixed: teal / acid green / deep violet on near-black.** Do not introduce full rainbow gradients, magenta, or warm hues. The palette `a/b/c/d` vectors in `psychedelic.frag` are tuned — adjust them only with intent. See [.claude/rules/shaders.md](.claude/rules/shaders.md).
+3. **Color palette is open neon spectrum, driven by depth + energy + value.** `uPaletteFamily` remains the snapped mode-family contract, while `uPaletteFamilyBlend` is render-loop-smoothed so modes 0/1 ↔ 2/3/4 do not hard-jump palettes. Brightness stays localized — no full-frame color flashes. See [.claude/rules/shaders.md](.claude/rules/shaders.md).
 
-4. **Render pipeline is three passes per frame** (main → trail blend → screen) using ping-pong `WebGLRenderTarget`s. Particles render last with `autoClear=false`. Swap order matters. See [.claude/rules/render-pipeline.md](.claude/rules/render-pipeline.md).
+4. **Render pipeline is three passes per frame** (main → trail blend → screen). The main pass writes to a fresh target; trail accumulation ping-pongs between two separate targets so the shader never samples and writes the same texture. Particles render last with `autoClear=false`. Swap order matters. See [.claude/rules/render-pipeline.md](.claude/rules/render-pipeline.md).
 
 5. **All `RawShaderMaterial` shaders MUST declare `precision highp float;`** at the top of the fragment shader. `ShaderMaterial` injects this; `RawShaderMaterial` does not.
 
-6. **GLSL int vs float matters.** `uMode` is `int`; integer literals like `1` go to `int` uniforms, `1.0` to `float` uniforms. Mismatches fail silently.
+6. **GLSL int vs float matters.** `uMode` and `uPaletteFamily` are `int`; `uPaletteFamilyBlend` is `float`. Integer literals like `1` go to `int` uniforms, `1.0` to `float` uniforms. Mismatches fail silently.
 
 7. **AudioContext requires a user gesture to start (Safari).** Always call `resumeContext()` from inside a click handler. See [src/audio/analyser.js](src/audio/analyser.js).
+
+8. **Mode continuity is local to the render loop.** UI buttons and store `mode` values still switch immediately, but `useThreeScene.js` eases visual transition state, palette family, trail hold, and particle spawn style. Do not move this into UI state without an explicit architecture change.
 
 ## File map
 
@@ -63,13 +65,13 @@ src/
 │
 ├── shaders/
 │   ├── psychedelic.vert       Passthrough vertex
-│   ├── psychedelic.frag       Main FBM domain-warp + palette
-│   ├── trail.frag             Frame-blend (decay 0.82)
-│   ├── particle.vert          Point sprite vertex
+│   ├── psychedelic.frag       Main SDF/FBM field + smoothed palette blend
+│   ├── trail.frag             Frame-blend with dynamic decay
+│   ├── particle.vert          Point sprite vertex + matched palette blend
 │   └── particle.frag          Soft circular point fragment
 │
 ├── hooks/
-│   ├── useThreeScene.js       Owns the render loop, all uniforms, particles
+│   ├── useThreeScene.js       Owns render loop, uniforms, visual smoothing, particles
 │   ├── useAudioAnalyser.js    rAF loop reading FFT, smoothing, → Zustand
 │   └── useURLState.js         Hydrate from URL on mount, sync controls back
 │
@@ -103,7 +105,7 @@ src/
 | Band | Hz range | Drives |
 |------|----------|--------|
 | `sub` | 0–86 | `uCamDrift` accumulator (slow inertial camera wander) + `uSub` per-frame |
-| `bass` | 86–430 | Scale warp, brightness pulse on kick, pulse spawn |
+| `bass` | 86–430 | Scale warp, brightness pulse on kick, force spawn at blob center (push) |
 | `mid` | 430–2150 | Domain distortion intensity, trail decay |
 | `hi` | 2150–8600 | Fine noise, particle spawn rate, shimmer |
 
@@ -111,12 +113,9 @@ User `Intensity` slider multiplies all bands before they hit the shader.
 
 ## Known issues (open, not yet fixed)
 
-| # | File | Issue |
-|---|------|-------|
-| 1 | `src/audio/fileAudio.js:11,24` | **Lint errors**: two empty `catch {}` blocks trip `no-empty` rule. Add `// ignore` comment or `_e` param. |
-| 2 | `src/components/LandingScreen.jsx:14` | **`duration-600` Tailwind class**: not in the default scale (steps are 500/700). Fade transition may not apply. Use `duration-500` or inline style. |
+No current lint failures are known as of the Safe Mode Continuity Fix (`npm run lint` passes).
 
-Previously tracked issues now resolved: palette red zone fixed (`t = f * 0.4 + 0.72`), touch events added (`touchmove` → `rawMouse`), `THREE.Clock` migrated to `THREE.Timer`.
+Previously tracked issues now resolved: palette red zone fixed, touch events added (`touchmove` → `rawMouse`), `THREE.Clock` migrated to `THREE.Timer`, and mode-family palette jumps softened via `uPaletteFamilyBlend`.
 
 ## Plan
 

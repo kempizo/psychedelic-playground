@@ -13,14 +13,18 @@ uniform float uChaos;
 uniform int   uMode;
 uniform vec2  uMouse;
 uniform float uMouseVel;
-uniform vec4  uPulses[8];
+uniform vec4  uForces[8];
 uniform float uColorSpike;
 uniform float uDistortionSpike;
 uniform vec2  uMouseDir;
-uniform vec4  uPulseExtra[8];
+uniform vec4  uForceMeta[8];
 uniform float uEnergy;
 uniform int   uPaletteFamily;
+uniform float uPaletteFamilyBlend;
 uniform float uPaletteShift;
+uniform float uBassMid;
+uniform float uMidHi;
+uniform float uBassHi;
 // Slow-decaying sub-bass accumulator — adds lazy drift weight to camera position
 uniform vec2  uCamDrift;
 
@@ -50,10 +54,10 @@ float noise3(vec3 p) {
         + noise(p.xz + p.y * 1.5731)) * 0.3333;
 }
 
-// 6-octave 2D FBM. Top octave (i==5) gated by uEnergy so idle is smoother.
+// 6-octave 2D FBM. Top octave gated by energy+midHi so idle is smoother.
 float fbm(vec2 p) {
   float v = 0.0, a = 0.5, f = 1.0;
-  float topGate = mix(0.0, 1.0, smoothstep(0.15, 0.55, uEnergy));
+  float topGate = mix(0.0, 1.0, smoothstep(0.10, 0.50, uEnergy + uMidHi * 0.4));
   for (int i = 0; i < 6; i++) {
     float contrib = a * noise(p * f);
     if (i == 5) contrib *= topGate;
@@ -70,28 +74,20 @@ float fbm3(vec3 p) {
   return v;
 }
 
-// ── Dual palette system ────────────────────────────────────────────────────────
-// Family 0: teal → acid green → deep violet (unchanged)
-// Family 1: deep purple base → electric violet → neon pink hot
-vec3 paletteFamily0(float t) {
-  vec3 a = vec3(0.05, 0.08, 0.10);
-  vec3 b = vec3(0.38, 0.48, 0.28);
-  vec3 c = vec3(1.00, 0.80, 1.20);
-  vec3 d = vec3(0.45, 0.25, 0.65);
-  return a + b * cos(6.28318 * (c * t + d));
-}
-
-vec3 paletteFamily1(float t) {
-  vec3 a = vec3(0.10, 0.04, 0.14);
-  vec3 b = vec3(0.55, 0.20, 0.45);
-  vec3 c = vec3(1.10, 0.70, 1.20);
-  vec3 d = vec3(0.95, 0.10, 0.55);
-  return a + b * cos(6.28318 * (c * t + d));
-}
-
+// ── Open neon palette (IQ cosine form) ────────────────────────────────────────
+// cyan → violet → magenta → acid-green spectrum.
+// uPaletteFamily stays available as the snapped mode family; uPaletteFamilyBlend
+// eases the same 0→1 family transition to avoid a hard palette jump.
+// uPaletteShift adds a transient break-event shift on top.
+// Brightness is localized (dark base + mid-amplitude swing); no full-frame colour flashes.
 vec3 palette(float t) {
-  float blendFactor = clamp(float(uPaletteFamily) + uPaletteShift, 0.0, 1.0);
-  return mix(paletteFamily0(t), paletteFamily1(t), blendFactor);
+  float phaseOffset = uPaletteFamilyBlend * 0.33 + uPaletteShift * 0.20;
+  t += phaseOffset;
+  vec3 a = vec3(0.50, 0.45, 0.55);
+  vec3 b = vec3(0.50, 0.50, 0.50);
+  vec3 c = vec3(1.00, 1.00, 0.50);
+  vec3 d = vec3(0.00, 0.33, 0.67);
+  return a + b * cos(6.28318 * (c * t + d));
 }
 
 // ── SDF: organic blob ──────────────────────────────────────────────────────────
@@ -103,7 +99,7 @@ float sdfBlob(vec3 p, float t, float tBase, float bass, float mid, float chaos) 
     cos(p.x * 1.9 + t * 0.7) + sin(p.z * 2.3 + t * 1.2),
     sin(p.x * 1.5 + t * 0.9) + cos(p.y * 2.7 + t * 0.6)
   );
-  float disp = fbm3(q * 1.2 + t * 0.15) * (0.28 + mid * 0.40 + bass * 0.18);
+  float disp = fbm3(q * 1.2 + t * 0.15) * (0.28 + mid * 0.40 + bass * 0.18 + uBassMid * 0.22);
   // Two incommensurate sinusoids ensure the orb is always alive at silence
   float breath = sin(tBase * 0.7) * 0.015 + sin(tBase * 0.31) * 0.008;
   return (length(q) - (0.85 + bass * 0.28 + disp + breath)) * 0.70;
@@ -159,58 +155,33 @@ void main() {
   float t       = tBase;
   float tJitter = tBase + noise(vec2(tBase * 0.027, 0.71)) * 0.14;
 
-  // ── NDC position for pulse evaluation (un-aspect-corrected) ───────────────
+  // ── NDC position for force field evaluation (un-aspect-corrected) ─────────
   vec2 ndcUV = vUv * 2.0 - 1.0;
 
-  // ── Pulse ring field (organic, per-type) ─────────────────────────────────
-  vec2  pulseWarp       = vec2(0.0);
-  float pulseGlow       = 0.0;
-  vec3  pulseColorAccum = vec3(0.0);
-  float pulseWeightSum  = 0.0;
+  // ── Force field: clicks/drags warp the FBM domain rather than drawing rings ─
+  // uForces[i]:    xy=origin, z=strength (signed: +push/-pull), w=age0to1
+  // uForceMeta[i]: xy=velocity, z=radius, w=unused
+  vec2  forceDisplace = vec2(0.0);
+  float forceEnergySum = 0.0;
 
   for (int i = 0; i < 8; i++) {
-    vec4 pu   = uPulses[i];
-    vec4 puEx = uPulseExtra[i];
-    if (pu.w < 0.001) continue;
+    vec4 fo  = uForces[i];
+    vec4 fm  = uForceMeta[i];
+    if (abs(fo.z) < 0.001 || fo.w > 0.999) continue;
 
-    float seed    = puEx.z;
-    float fbmW    = fbm(ndcUV * 3.5 + vec2(seed * 4.7, seed * 6.3));
-    vec2  warpedP = ndcUV + fbmW * 0.05 * pu.w;
-    vec2  toFrag  = warpedP - pu.xy;
-    float rawDist = length(toFrag);
+    float r2     = fm.z * fm.z;
+    vec2  delta  = ndcUV - fo.xy;
+    float d2     = dot(delta, delta);
+    float falloff = exp(-d2 / max(r2, 0.0001));
 
-    float noisePerturb = noise(toFrag * 2.8 + vec2(seed * 1.37, seed * 0.71))
-                       * 0.09 * pu.w;
-
-    vec2  dir   = length(puEx.xy) > 0.001 ? normalize(puEx.xy) : vec2(1.0, 0.0);
-    vec2  perp  = vec2(-dir.y, dir.x);
-    float dPara = dot(toFrag, dir);
-    float dPerp = dot(toFrag, perp);
-    float anisoDist = length(vec2(dPara * 0.88, dPerp * 1.12));
-
-    float dist = rawDist + noisePerturb;
-    dist       = mix(dist, anisoDist + noisePerturb * 0.5, 0.4 * pu.w);
-
-    float distFromRing = abs(dist - pu.z);
-    float ring = exp(-distFromRing * distFromRing / (0.0015 + pu.w * 0.003)) * pu.w;
-
-    float gd2  = (dist - pu.z) / 0.28;
-    float glow = exp(-gd2*gd2 * 0.5) * pu.w * 0.4;
-
-    float typeIdx = puEx.w;
-    vec3 typeColor = typeIdx < 0.5 ? vec3(1.00, 0.08, 0.90)
-                  : typeIdx < 1.5 ? vec3(0.00, 0.85, 1.00)
-                  : typeIdx < 2.5 ? vec3(0.55, 0.08, 1.00)
-                                  : vec3(0.08, 0.90, 0.80);
-
-    vec2 warpDir = normalize(toFrag + vec2(noisePerturb, noisePerturb * 0.6) + vec2(0.0001));
-    pulseWarp        += (ring + glow * 0.3) * warpDir * 0.14;
-    pulseGlow        += ring + glow;
-    pulseColorAccum  += typeColor * (ring + glow);
-    pulseWeightSum   += ring + glow;
+    // Push: warp outward from origin; pull: warp inward
+    vec2 dir = length(delta) > 0.0001 ? normalize(delta) : vec2(0.0, 1.0);
+    forceDisplace  += falloff * sign(fo.z) * dir * abs(fo.z) * (1.0 - fo.w);
+    forceEnergySum += falloff * abs(fo.z) * (1.0 - fo.w);
   }
-  pulseGlow = clamp(pulseGlow, 0.0, 1.0);
-  sUV += pulseWarp;
+  forceEnergySum = clamp(forceEnergySum, 0.0, 1.0);
+  // Inject into screen UV so force disturbances feed into camera + FBM chain
+  sUV += forceDisplace * 0.18;
   sUV += uMouseDir * uMouseVel * 0.06;
 
   // Break-event shimmer: sinusoidal screen warp driven by uDistortionSpike
@@ -309,27 +280,31 @@ void main() {
   }
 
   // ── Sphere tracer (40 steps) ───────────────────────────────────────────────
-  float tRay   = 0.08;
+  float tRay    = 0.08;
   float hitDist = -1.0;
   float minD    = 100.0;
+  float maxDist = 8.0;
 
   for (int i = 0; i < 40; i++) {
     vec3  p = ro + rd * tRay;
     float d;
     if (uMode == 4) {
-      d = sdfOrbit(p, tJitter, tBase, uBass, uMid, uChaos) + pulseGlow * 0.03;
+      d = sdfOrbit(p, tJitter, tBase, uBass, uMid, uChaos);
     } else {
-      // Collapse: modulate blob radius by bass-mid difference
       float collapseMod = uMode == 3 ? (uBass - uMid) * 0.20 : 0.0;
-      d = sdfBlob(p, tJitter, tBase, uBass + collapseMod, uMid, uChaos) + pulseGlow * 0.03;
+      d = sdfBlob(p, tJitter, tBase, uBass + collapseMod, uMid, uChaos);
     }
     minD = min(minD, abs(d));
     if (abs(d) < 0.006) { hitDist = tRay; break; }
     tRay += max(abs(d) * 0.55, 0.015);
-    if (tRay > 10.0) break;
+    if (tRay > maxDist) break;
   }
 
-  float depthFog = 1.0 - exp(-tRay * 0.032);
+  // depth01: 0 = close foreground, 1 = far background / miss
+  float depth01   = clamp(tRay / maxDist, 0.0, 1.0);
+  float depthFog  = 1.0 - exp(-tRay * 0.032);
+  // Atmospheric fog color: cool near-black tinted by current palette
+  vec3  fogColor  = palette(uPaletteShift * 0.5) * 0.04;
 
   vec3 col = vec3(0.0);
 
@@ -340,25 +315,32 @@ void main() {
     vec3  lDir = normalize(vec3(sin(t * 0.35) * 1.2, 0.8, cos(t * 0.35) * 1.2));
 
     float diff    = max(0.0, dot(nrm, lDir)) * 0.65 + 0.18;
-    float fresnel = pow(1.0 - abs(dot(nrm, -rd)), 2.5);
 
-    // Palette bias fix: 0.4 * v + 0.72 centers on acid-green / violet, avoids red zone
-    float noiseV = fbm3(p * 0.55 + t * 0.08);
-    float ct     = noiseV * 0.4 + 0.72 + uColorShift * 0.4 + uHi * 0.10;
+    // t driven by value + energy + depth: foreground/high-energy → magenta/cyan
+    float noiseV  = fbm3(p * 0.55 + t * 0.08);
+    float surfDepth = clamp(hitDist / maxDist, 0.0, 1.0);
+    float ct      = noiseV * 0.25 + uEnergy * 0.30 + (1.0 - surfDepth) * 0.25
+                  + uPaletteShift * 0.20 + uColorShift * 0.25 + uMidHi * 0.10;
 
     col  = palette(ct) * diff;
     float rimTight = pow(1.0 - abs(dot(nrm, -rd)), 4.5);
     float rimWide  = pow(1.0 - abs(dot(nrm, -rd)), 1.8);
-    col += palette(ct + 0.32) * rimTight * (1.4 + uHi * 1.0);
+    // Foreground rim is stronger — gives vanishing-perspective look
+    float rimBoost = mix(1.8, 0.8, surfDepth);
+    col += palette(ct + 0.32) * rimTight * (1.4 + uHi * 1.0) * rimBoost;
     col += palette(ct + 0.55) * rimWide  * 0.18;
     col += vec3(0.9, 1.0, 0.95) * rimTight * 0.06;
     col += palette(ct + 0.50) * 0.06;
-    col += uBass * 0.30 * vec3(0.08, 0.38, 0.28);
-    col *= (1.0 - hitDist / 8.0 * 0.12);
+    col += uBass * 0.30 * palette(ct + 0.15) * 0.4;
+    col *= (1.0 - surfDepth * 0.15);
+    // Atmospheric fog: blend toward near-black at depth
+    col  = mix(col, fogColor, smoothstep(0.3, 0.9, surfDepth));
 
   } else {
     // ── Volumetric glow: near-miss rays accumulate fog ───────────────────────
-    float glow  = exp(-minD * 3.5) * 0.65;
+    // Glow stronger in foreground (small depth01), fades at back
+    float glowStr = mix(0.80, 0.40, depth01);
+    float glow    = exp(-minD * 3.5) * glowStr;
     vec2 bgFlow = vec2(
       sin(t * 0.04 + sUV.y * 0.65) * 0.18,
       cos(t * 0.035 + sUV.x * 0.55) * 0.14
@@ -368,6 +350,7 @@ void main() {
     col += palette(bgT + 0.50) * 0.07;
     col *= (1.0 - depthFog * 0.45);
     col += palette(bgT + 0.30) * depthFog * 0.07 * (0.3 + uBass * 0.2);
+    col  = mix(col, fogColor, smoothstep(0.5, 1.0, depth01));
   }
 
   // ── Subsurface proximity glow ─────────────────────────────────────────────
@@ -375,9 +358,20 @@ void main() {
   float proxT    = fbm(sUV * 0.28 + vec2(t * 0.05, 0.0)) * 0.4 + 0.72 + uColorShift * 0.3;
   col += palette(proxT + 0.15) * proxGlow * (0.35 + uBass * 0.45);
 
-  // ── Pulse ring color overlay ──────────────────────────────────────────────
-  vec3 pulseColorMix = pulseWeightSum > 0.001 ? pulseColorAccum / pulseWeightSum : vec3(0.0, 0.72, 0.85);
-  col += pulseColorMix * pulseGlow * (0.8 + uColorSpike * 0.5);
+  // ── Energy filaments: sparse curved streaks, visible only during energetic moments ──
+  // Threshold FBM at a tight band → sparse arcs; mask by energy+force so they
+  // only surface during peaks. No second pass needed — lives in the same shader.
+  float energyMask = clamp(forceEnergySum + uEnergy * 1.2 + uBassHi * 0.8, 0.0, 1.0);
+  if (energyMask > 0.05) {
+    vec2  filUV  = sUV * 3.8 + vec2(t * 0.06, t * -0.04);
+    float filN   = fbm(filUV);
+    float filLine = smoothstep(0.54, 0.58, filN) * smoothstep(0.62, 0.58, filN);
+    float filT    = filN * 0.3 + uEnergy * 0.4 + uColorShift * 0.2;
+    col += palette(filT) * filLine * energyMask * 0.55;
+  }
+
+  // ── Force-energy brightness: forces locally amplify field brightness ────────
+  col += palette(t * 0.4 + 0.5) * forceEnergySum * 0.45;
   col += palette(t * 0.4 + 0.5) * uColorSpike * 0.25;
 
   // ── Mouse energy ripple ────────────────────────────────────────────────────
