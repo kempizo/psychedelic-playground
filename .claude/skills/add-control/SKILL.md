@@ -1,6 +1,6 @@
 ---
 name: add-control
-description: Add a new user-facing control (slider or toggle) end-to-end — wires the Zustand store, the ControlPanel UI, the shader uniform in useThreeScene, the URL share params, and adds the uniform declaration to psychedelic.frag. Use when the user wants to expose a new visual parameter as a control.
+description: Add a new user-facing control end-to-end — wires Zustand defaults, ControlPanel UI, render-loop uniforms or particle/trail handling, URL share params, preset defaults/ranges, and shader declarations where needed. Use when the user wants to expose a visual parameter as a control.
 argument-hint: [name] [min] [max] [default]
 allowed-tools: Read, Edit, Grep
 ---
@@ -11,13 +11,14 @@ Wires a new user control (`$ARGUMENTS`) through every layer of the app so it's a
 
 ## What this changes
 
-Five files, in this order:
+Usually six or more files, in this order:
 
 1. **`src/store/useStore.js`** — add field with default value to the store object.
 2. **`src/components/ControlPanel.jsx`** — add a row to the `CONTROLS` array.
-3. **`src/hooks/useThreeScene.js`** — add to `mainUniforms` (initial value), and update inside the `tick()` function each frame.
-4. **`src/shaders/psychedelic.frag`** — declare the uniform at the top, use it in the body where it makes sense.
-5. **`src/utils/shareUtils.js`** — add the key to `KEYS` and `DEFAULTS` so it survives URL save/share.
+3. **`src/hooks/useThreeScene.js`** — read the control in `tick()` and wire it to the existing render, trail, or particle path.
+4. **Shader file as needed** — usually `psychedelic.frag`, but trail controls may use `trail.frag` and particle controls may use `particle.vert` / `particle.frag`.
+5. **`src/utils/shareUtils.js`** — add the key to `KEYS`, `DEFAULTS`, and `RANGES` so it survives URL save/share safely.
+6. **`src/utils/presetUtils.js`** — add the key to preset defaults and mutation ranges when the control should save/load/mutate.
 
 ## Naming conventions
 
@@ -49,7 +50,7 @@ Then add `<name>` to the destructured store hook call and the `values` object on
 
 In `src/hooks/useThreeScene.js`:
 
-Add to `mainUniforms` (initial value):
+Add to the relevant uniforms object when the control needs a shader value:
 ```js
 u<PascalName>: { value: <default> },
 ```
@@ -61,14 +62,16 @@ mainUniforms.u<PascalName>.value = <name>
 
 Make sure to also destructure `<name>` from `useStore.getState()` at the top of `tick()`.
 
+If the control affects trail decay, particles, camera smoothing, or spawn logic, wire it into that existing path instead of forcing it through `psychedelic.frag`.
+
 ### 4. Shader
 
-In `src/shaders/psychedelic.frag`, add the uniform declaration near the top:
+In the shader that actually consumes the value, add the uniform declaration near the top:
 ```glsl
 uniform float u<PascalName>;
 ```
 
-Then use it somewhere in the `main()` function where it makes sense for the parameter's purpose. If the user didn't specify what the parameter should do visually, ASK before guessing — wiring a uniform that does nothing is worse than no uniform.
+Then use it where it matches the parameter's purpose. If the user didn't specify what the parameter should do visually, ASK before guessing — wiring a uniform that does nothing is worse than no uniform.
 
 ### 5. URL share
 
@@ -84,11 +87,15 @@ Add to `DEFAULTS`:
 <name>: <default>,
 ```
 
-If the value is an integer (like `mode`), also update the `deserialize` parseInt branch.
+Add a matching range to `RANGES`. If the value is an integer (like `mode`), also update the `deserialize` parseInt branch.
+
+### 6. Presets
+
+In `src/utils/presetUtils.js`, add the control to `PARAM_DEFAULTS`. If `mutatePreset()` should vary it, also add a `RANGES` entry. If the control is saved but should never mutate, leave it out of mutation ranges and document why.
 
 ## Verify
 
-After all 5 edits, run:
+After all edits, run:
 ```bash
 npm run build
 ```
@@ -97,4 +104,4 @@ If the build succeeds, the wiring is good — the slider will appear, drive the 
 
 ## Reference
 
-Existing controls (`speed`, `intensity`, `colorShift`, `chaos`) are full examples — read them across all 5 files if anything is unclear before adding a new one.
+Existing controls (`speed`, `intensity`, `colorShift`, `chaos`, `trailDecay`, `cameraDistance`, `procIntensity`, `particleDensity`) are examples. Read similar controls across store, UI, render loop, shaders, URL sharing, and presets before adding a new one.

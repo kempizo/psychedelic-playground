@@ -7,6 +7,10 @@ const DEFAULT_CONTROLS = {
   colorShift: 0.0,
   chaos: 0.5,
   mode: 0,
+  trailDecay: 0.84,
+  cameraDistance: 0,
+  procIntensity: 0.45,
+  particleDensity: 1,
 }
 
 const useStore = create((set, get) => ({
@@ -23,6 +27,8 @@ const useStore = create((set, get) => ({
     beatPhase: 0,
     beatConfidence: 0,
     latencySec: 0,
+    spectralCentroid: 0,
+    spectralFlux: 0,
   },
 
   // UI controls
@@ -60,8 +66,8 @@ const useStore = create((set, get) => ({
   setIsRecording: (v) => set({ isRecording: v }),
 
   savePreset: () => {
-    const { speed, intensity, colorShift, chaos, mode } = get()
-    const preset = createPreset({ speed, intensity, colorShift, chaos, mode })
+    const { speed, intensity, colorShift, chaos, mode, trailDecay, cameraDistance, procIntensity, particleDensity } = get()
+    const preset = createPreset({ speed, intensity, colorShift, chaos, mode, trailDecay, cameraDistance, procIntensity, particleDensity })
     const presets = [...get().presets, preset]
     savePresets(presets)
     set({ presets, activePresetId: preset.id })
@@ -70,7 +76,7 @@ const useStore = create((set, get) => ({
   loadPreset: (id) => {
     const preset = get().presets.find(p => p.id === id)
     if (!preset) return
-    set({ ...preset.params, activePresetId: id })
+    set({ ...DEFAULT_CONTROLS, ...preset.params, activePresetId: id })
   },
 
   deletePreset: (id) => {
@@ -89,7 +95,17 @@ const useStore = create((set, get) => ({
     const state = get()
     const base = state.activePresetId
       ? state.presets.find(p => p.id === state.activePresetId)
-      : createPreset({ speed: state.speed, intensity: state.intensity, colorShift: state.colorShift, chaos: state.chaos, mode: state.mode })
+      : createPreset({
+          speed: state.speed,
+          intensity: state.intensity,
+          colorShift: state.colorShift,
+          chaos: state.chaos,
+          mode: state.mode,
+          trailDecay: state.trailDecay,
+          cameraDistance: state.cameraDistance,
+          procIntensity: state.procIntensity,
+          particleDensity: state.particleDensity,
+        })
     if (!base) return
     const mutated = mutatePreset(base)
     const presets = [...state.presets, mutated]

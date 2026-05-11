@@ -26,7 +26,7 @@ If you skip the gesture, `decodeAudioData` and mic capture silently produce zero
 ## FFT extraction
 `AnalyserNode.fftSize = 2048` → `frequencyBinCount = 1024` bins. Each bin = `sampleRate / fftSize` ≈ 21.5 Hz at 44.1 kHz.
 
-The 4-band split in `bands.js`:
+`bands.js` extracts four normalized band amplitudes plus spectral descriptors:
 
 | Band | Bins | Hz |
 |------|------|-----|
@@ -34,6 +34,8 @@ The 4-band split in `bands.js`:
 | `bass` | 4–20 | 86–430 |
 | `mid` | 20–100 | 430–2150 |
 | `hi` | 100–400 | 2150–8600 |
+
+It also computes `spectralCentroid` and `spectralFlux` from the FFT frame. `useAudioAnalyser.js` smooths both with the same direct-to-store pattern as the core bands. Silence should keep flux near zero.
 
 If you change `fftSize`, update bin ranges proportionally.
 

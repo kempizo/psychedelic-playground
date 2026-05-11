@@ -1,3 +1,7 @@
+# Historical Reference Only
+
+This file is archived for context. It is not active project guidance. Use `AGENTS.md`, `CLAUDE.md`, `PLAN.md`, and `.claude/rules/` for current instructions.
+
 ## Current Codebase Summary
 
 - `src/` is a small, well-scoped React + Vite app with a Three.js fullscreen quad, raw GLSL shaders loaded via `?raw`, and a strict three-pass render pipeline: main visual → trail accumulation → particles.

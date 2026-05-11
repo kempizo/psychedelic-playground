@@ -15,10 +15,10 @@ Single Zustand store at `src/store/useStore.js`. No Context, no Redux, no React 
 ```js
 {
   // Audio data — written 60×/sec from useAudioAnalyser via getState()
-  audioData: { sub, bass, mid, hi },
+  audioData: { sub, bass, mid, hi, spectralCentroid, spectralFlux },
 
   // UI controls — written by ControlPanel, read by useThreeScene each frame
-  speed, intensity, colorShift, chaos, mode,
+  speed, intensity, colorShift, chaos, mode, trailDecay, cameraDistance, procIntensity, particleDensity,
 
   // Audio source state — written by AudioInput
   audioSource, isPlaying,
@@ -47,7 +47,7 @@ Used in `useThreeScene`'s `tick()` and `useAudioAnalyser`'s rAF loop. NEVER subs
 1. On mount: reads `window.location.search`, deserializes via `shareUtils`, applies via `setControl`.
 2. After mount: subscribes to store changes and pushes serialized state to `history.replaceState` (no navigation).
 
-**Don't add `audioData` to URL params.** Only the 5 user controls. The `serialize`/`deserialize` keys list lives in `shareUtils.js` — keep them in sync if you add a control.
+**Don't add `audioData` to URL params.** Only user-facing controls belong in share state. The `serialize`/`deserialize` keys list lives in `shareUtils.js` — keep them in sync if you add a control.
 
 ## Adding a new control
 

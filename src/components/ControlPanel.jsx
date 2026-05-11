@@ -5,14 +5,18 @@ const CONTROLS = [
   { key: 'intensity',  label: 'Intensity',   min: 0,    max: 1.5, step: 0.01 },
   { key: 'colorShift', label: 'Color Shift', min: 0,    max: 1,   step: 0.01 },
   { key: 'chaos',      label: 'Chaos',       min: 0,    max: 1,   step: 0.01 },
+  { key: 'trailDecay', label: 'Trail Decay', min: 0.70, max: 0.94, step: 0.01 },
+  { key: 'cameraDistance', label: 'Camera Distance', min: -0.7, max: 0.9, step: 0.01 },
+  { key: 'procIntensity', label: 'Texture Layer', min: 0, max: 1, step: 0.01 },
+  { key: 'particleDensity', label: 'Particle Density', min: 0, max: 2, step: 0.01 },
 ]
 
 const MODES = ['Fluid', 'Radial', 'Vortex', 'Collapse', 'Orbit']
 
 export default function ControlPanel({ onReset, isHidden }) {
-  const { speed, intensity, colorShift, chaos, mode, setControl, resetControls } = useStore()
+  const { speed, intensity, colorShift, chaos, mode, trailDecay, cameraDistance, procIntensity, particleDensity, setControl, resetControls } = useStore()
 
-  const values = { speed, intensity, colorShift, chaos }
+  const values = { speed, intensity, colorShift, chaos, trailDecay, cameraDistance, procIntensity, particleDensity }
 
   return (
     <div className={`fixed bottom-0 left-0 right-0 flex justify-center pb-6 px-4 pointer-events-none transition-opacity duration-500 ${isHidden ? 'opacity-0 pointer-events-none' : ''}`}>

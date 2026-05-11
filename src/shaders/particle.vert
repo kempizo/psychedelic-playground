@@ -10,6 +10,7 @@ uniform float uPaletteShift;
 uniform float uEnergy;
 uniform float uParticleEnergy;
 uniform float uBeatPhase;
+uniform float uParticleDensity;
 
 varying float vAlpha;
 varying vec3  vColor;
@@ -31,7 +32,8 @@ void main() {
   float norm = clamp(age / max(life, 0.001), 0.0, 1.0);
   float fade = (1.0 - smoothstep(0.0, 1.0, norm));
   float beatSoft = 0.75 + 0.25 * sin(uBeatPhase * 6.28318 + aDepth * 2.0);
-  vAlpha = fade * aDepth * (0.38 + uParticleEnergy * 0.38) * beatSoft;
+  float densityAlpha = mix(0.72, 1.25, clamp(uParticleDensity, 0.0, 2.0) * 0.5);
+  vAlpha = fade * aDepth * (0.38 + uParticleEnergy * 0.38) * beatSoft * densityAlpha;
 
   // Palette offset per type; energy pushes sparks toward magenta/cyan
   float typeOffset = aType < 0.5 ? 0.10
@@ -43,6 +45,7 @@ void main() {
   vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
   // Depth and type affect size: sparks are small and fast, dust is larger
   float baseSize = aType < 0.5 ? 3.6 : aType < 1.5 ? 2.2 : 3.0;
-  gl_PointSize = (baseSize + vAlpha * 1.4 + uParticleEnergy * 1.2) * aDepth * uPixelRatio;
+  float densitySize = mix(0.82, 1.18, clamp(uParticleDensity, 0.0, 2.0) * 0.5);
+  gl_PointSize = (baseSize + vAlpha * 1.4 + uParticleEnergy * 1.2) * aDepth * uPixelRatio * densitySize;
   gl_Position = projectionMatrix * mvPos;
 }

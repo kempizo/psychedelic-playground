@@ -19,21 +19,21 @@ Node 18+ required. Three.js dev tools are useful for shader debugging.
 - **Three.js** — full-screen quad with `RawShaderMaterial`, three-pass render loop
 - **Zustand** — single store, written directly via `getState()` for 60fps updates
 - **Tailwind 3** — utility classes for the overlay UI
-- **Web Audio API** — `AnalyserNode` (FFT 2048), 4 frequency bands
+- **Web Audio API** — `AnalyserNode` (FFT 2048), 4 bands plus spectral centroid/flux features
 
-No backend. Save/share serializes 5 controls to URL query params.
+No backend. Save/share serializes the user controls to URL query params.
 
 ## Critical conventions
 
-These are non-obvious and break things if violated. Path-scoped details live in [.Codex/rules/](.Codex/rules/).
+These are non-obvious and break things if violated. Path-scoped details live in [.claude/rules/](.claude/rules/).
 
 1. **Audio data NEVER goes through React state.** `useAudioAnalyser` writes 60×/sec via `useStore.getState().setAudioData(...)` — calling `set` from a React component would re-render the whole tree at 60fps. The render loop reads via `useStore.getState()` inside `requestAnimationFrame`.
 
 2. **Shaders are loaded as raw strings via `?raw`.** Never inline GLSL in JS unless trivially small (the final-pass passthrough shader is the only exception). Edit the `.vert`/`.frag` files directly.
 
-3. **Color palette is open neon spectrum, driven by depth + energy + value.** `uPaletteFamily` remains the snapped mode-family contract, while `uPaletteFamilyBlend` is render-loop-smoothed so modes 0/1 ↔ 2/3/4 do not hard-jump palettes. Brightness stays localized — no full-frame color flashes. See [.Codex/rules/shaders.md](.Codex/rules/shaders.md).
+3. **Color palette is open neon spectrum, driven by depth + energy + value.** `uPaletteFamily` remains the snapped mode-family contract, while `uPaletteFamilyBlend` is render-loop-smoothed so modes 0/1 ↔ 2/3/4 do not hard-jump palettes. Brightness stays localized — no full-frame color flashes. See [.claude/rules/shaders.md](.claude/rules/shaders.md).
 
-4. **Render pipeline is three passes per frame** (main → trail blend → screen). The main pass writes to a fresh target; trail accumulation ping-pongs between two separate targets so the shader never samples and writes the same texture. Particles render last with `autoClear=false`. Swap order matters. See [.Codex/rules/render-pipeline.md](.Codex/rules/render-pipeline.md).
+4. **Render pipeline is three passes per frame** (main → trail blend → screen). The main pass writes to a fresh target; trail accumulation ping-pongs between two separate targets so the shader never samples and writes the same texture. Particles render last with `autoClear=false`. Swap order matters. See [.claude/rules/render-pipeline.md](.claude/rules/render-pipeline.md).
 
 5. **All `RawShaderMaterial` shaders MUST declare `precision highp float;`** at the top of the fragment shader. `ShaderMaterial` injects this; `RawShaderMaterial` does not.
 
@@ -53,7 +53,7 @@ src/
 │
 ├── audio/
 │   ├── analyser.js            Singleton AudioContext + AnalyserNode
-│   ├── bands.js               FFT array → {sub, bass, mid, hi}
+│   ├── bands.js               FFT array → {sub, bass, mid, hi, spectralCentroid, spectralFlux}
 │   ├── mic.js                 getUserMedia → AnalyserNode
 │   └── fileAudio.js           File → AudioBuffer → looped playback
 │
@@ -76,7 +76,7 @@ src/
 │   └── useURLState.js         Hydrate from URL on mount, sync controls back
 │
 ├── store/
-│   └── useStore.js            Zustand: audioData + 5 controls + audioSource
+│   └── useStore.js            Zustand: audioData + user controls + audioSource
 │
 ├── behaviors/
 │   └── BehavioralController.js  State machine: calm/build/peak/afterglow, energy, break events
@@ -85,7 +85,7 @@ src/
 │   ├── VisualCanvas.jsx       Mounts canvas, calls hooks (forwardRef → exposes canvas to App)
 │   ├── LandingScreen.jsx      Initial CTA overlay (mic/upload)
 │   ├── AudioInput.jsx         Mic permission + file picker
-│   ├── ControlPanel.jsx       4 sliders + mode toggle (5 modes)
+│   ├── ControlPanel.jsx       User sliders + mode toggle (5 modes)
 │   ├── ShareButton.jsx        Serialize state → clipboard
 │   ├── EnergyIndicator.jsx    Real-time energy/state display
 │   ├── PresetPanel.jsx        Save/load/mutate named presets
@@ -117,20 +117,24 @@ No current lint failures are known as of the Safe Mode Continuity Fix (`npm run 
 
 Previously tracked issues now resolved: palette red zone fixed, touch events added (`touchmove` → `rawMouse`), `THREE.Clock` migrated to `THREE.Timer`, and mode-family palette jumps softened via `uPaletteFamilyBlend`.
 
-## Plan
+## Documentation layout
 
-The MVP plan that this codebase implements is at [.Codex/plans/psychedelic-playground-mvp.md](.Codex/plans/psychedelic-playground-mvp.md). Treat it as the spec.
+- `AGENTS.md` is the universal source of truth for all coding agents.
+- `CLAUDE.md` is a thin Claude-specific wrapper that points back here.
+- `PLAN.md` is the active execution ledger and guardrail map.
+- `.claude/` is the canonical project instruction folder for rules, plans, skills, and agents.
+- `.codex/` is retained only for Codex-specific local configuration and agent metadata.
 
 ## When working in specific areas
 
 These rules auto-load only when matching files are open — see frontmatter `paths:` field in each:
 
-- [.Codex/rules/shaders.md](.Codex/rules/shaders.md) — GLSL conventions, palette, FBM patterns
-- [.Codex/rules/audio.md](.Codex/rules/audio.md) — Web Audio API patterns, mic/file flow
-- [.Codex/rules/render-pipeline.md](.Codex/rules/render-pipeline.md) — three.js render loop, ping-pong, particles
-- [.Codex/rules/state.md](.Codex/rules/state.md) — Zustand patterns, URL sync, no audio in React
+- [.claude/rules/shaders.md](.claude/rules/shaders.md) — GLSL conventions, palette, FBM patterns
+- [.claude/rules/audio.md](.claude/rules/audio.md) — Web Audio API patterns, mic/file flow
+- [.claude/rules/render-pipeline.md](.claude/rules/render-pipeline.md) — three.js render loop, ping-pong, particles
+- [.claude/rules/state.md](.claude/rules/state.md) — Zustand patterns, URL sync, no audio in React
 
 ## Subagents and skills
 
-- `/agents` → see `.Codex/agents/shader-tuner.md` for GLSL-focused work
+- `/agents` → see `.claude/agents/shader-tuner.md` for GLSL-focused work
 - `/add-control` → end-to-end skill that adds a new slider (store + UI + uniform + shader)

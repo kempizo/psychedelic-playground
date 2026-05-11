@@ -1,3 +1,7 @@
+# Historical Reference Only
+
+This file is archived for context. It is not active project guidance. Use `AGENTS.md`, `CLAUDE.md`, `PLAN.md`, and `.claude/rules/` for current instructions.
+
 # Psychedelic Playground Evolution Plan
 ## Claude Code Implementation Strategy
 

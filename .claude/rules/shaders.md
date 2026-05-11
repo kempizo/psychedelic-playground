@@ -49,6 +49,7 @@ GLSL fails silently on type mismatch. The setup:
 |---------|-----------|---------------|
 | `uTime`, `uBass`, `uMid`, `uHi`, `uSub`, `uSpeed`, `uIntensity`, `uColorShift`, `uChaos` | `float` | JS `number` |
 | `uMouseVel`, `uColorSpike`, `uDistortionSpike`, `uEnergy`, `uPaletteShift`, `uPaletteFamilyBlend` | `float` | JS `number` |
+| `uSpectralCentroid`, `uSpectralFlux`, `uProcIntensity`, `uParticleDensity`, `uCameraDistance` | `float` | JS `number` |
 | `uMode`, `uPaletteFamily` | `int` | JS integer (no decimals) |
 | `uResolution`, `uMouse`, `uMouseDir`, `uCamDrift` | `vec2` | `THREE.Vector2` |
 | `uForces` | `vec4[8]` | `THREE.Vector4[]` — `xy=origin, z=strength (signed), w=age0to1` |

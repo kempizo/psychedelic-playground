@@ -1,113 +1,93 @@
-# Psychedelic Playground — Project Progress
+# Psychedelic Playground - Project Progress
 
-## Status: Core bugs resolved, audio playback working, pause button pending
-
----
+## Status: Current MVP implemented; docs consolidated around active rules
 
 ## Done
 
 ### Infrastructure
-- [x] Vite + React 19 + Three.js + Zustand project scaffold
-- [x] Tailwind CSS 3 with full-screen dark layout
-- [x] `src/` folder structure: `audio/`, `components/`, `hooks/`, `shaders/`, `store/`, `three/`, `utils/`
-- [x] Git repository initialized
-- [x] `.claude/` project config: CLAUDE.md, rules, agents, skills, settings.json
+
+- [x] Vite + React 19 + Three.js + Zustand app scaffold.
+- [x] Tailwind CSS 3 fullscreen dark overlay UI.
+- [x] `src/` folder structure for audio, behaviors, components, hooks, shaders, store, three, and utils.
+- [x] `.claude/` project docs for rules, plans, agents, skills, and progress.
+- [x] `AGENTS.md` universal agent contract and thin `CLAUDE.md` wrapper.
 
 ### Visual Engine
-- [x] Full-screen WebGL canvas via Three.js `OrthographicCamera` + `PlaneGeometry(2,2)`
-- [x] `psychedelic.frag`: FBM domain warping (6 octaves, 2-layer IQ technique), cosine palette (teal/green/violet), vignette
-- [x] 3-pass render pipeline: main shader → trail blend (ping-pong) → screen composite
-- [x] Trail/echo effect (decay 0.82) via two `WebGLRenderTarget`s swapped each frame
-- [x] CPU particle system (128 max), treble-triggered spawn, additive blending
-- [x] **Bug fixed**: `psychedelic.vert` was missing `precision highp float;` and attribute declarations — caused silent shader compile failure (black canvas)
+
+- [x] Fullscreen WebGL canvas with Three.js orthographic fullscreen quad.
+- [x] Main `psychedelic.frag` SDF/FBM field with palette-family smoothing.
+- [x] Fixed render pipeline: main shader -> trail accumulation -> screen -> particles.
+- [x] Ping-pong trail accumulation with separate read/write render targets.
+- [x] Five render modes: Fluid, Radial, Vortex, Collapse, and Orbit.
+- [x] Procedural texture layer modulated by spectral flux and `procIntensity`.
+- [x] CPU particle system with fixed buffers, additive blending, mode-aware spawning, density control, and audio reactivity.
 
 ### Audio
-- [x] Web Audio API singleton `AudioContext`
-- [x] Mic input with Safari-safe `context.resume()` inside click handler
-- [x] File drag-and-drop audio input
-- [x] FFT analysis → 4 frequency bands: sub (0–86Hz), bass (86–430Hz), mid (430–2150Hz), hi (2150–8600Hz)
-- [x] Exponential smoothing per band (attack/release)
-- [x] 60fps writes to Zustand store via `getState()` — no React re-renders
 
-### Controls & UI
-- [x] Landing screen with animated overlay, `AudioInput` selector
-- [x] Control panel: Speed, Intensity, Color Shift, Chaos, Mode sliders
-- [x] Zustand store with `setControl`, `setAudioData`, `setAudioSource`, `setIsPlaying`
-- [x] URL save/share: 5 controls serialized to query params via `history.replaceState`
-- [x] Share button copies URL to clipboard
-- [x] "Change source" button in ControlPanel to switch between mic and file without page reload
+- [x] Singleton Web Audio `AudioContext` and `AnalyserNode`.
+- [x] Mic input with user-gesture-safe context resume.
+- [x] File audio input with speaker output and analyser routing.
+- [x] FFT analysis for sub, bass, mid, hi, spectral centroid, and spectral flux.
+- [x] Smoothed audio snapshots written through `useStore.getState().setAudioData(...)`.
+- [x] High-frequency audio kept out of React render state.
 
-### Bug Fixes (session 2)
-- [x] **StrictMode removed** — React StrictMode double-invokes `useEffect` in dev, destroying the WebGL context on cleanup; canvas can only hold one context per lifetime
-- [x] **WebGL feedback loop resolved** — Added third independent `WebGLRenderTarget` (rtC); trailRead/trailWrite now ping-pong between rtB and rtC so Pass 2 never reads and writes the same texture simultaneously; texture uniforms explicitly nulled between passes to prevent Three.js binding cache from carrying stale references
-- [x] **`history.replaceState` rate limit fixed** — Added `lastUrl` cache in `useURLState`; `replaceState` only fires when serialized URL actually changes, not on every 60fps audio store update
-- [x] **File audio silent playback fixed** — `connectSource()` in `analyser.js` was only routing to the `AnalyserNode`; added optional `toSpeakers` flag that also connects to `ctx.destination`; file audio passes `true`, mic does not (prevents feedback)
+### Controls, Sharing, and Presets
 
----
+- [x] User controls for speed, intensity, colorShift, chaos, trailDecay, cameraDistance, procIntensity, particleDensity, and mode.
+- [x] Reset-to-default flow.
+- [x] URL save/share for user-facing controls.
+- [x] Shared preset decoding.
+- [x] Local preset save, load, delete, and mutate flows.
+- [x] Control defaults and preset backfill for newer controls.
 
-## What's Next
+### Interaction and Output
 
-### High Priority
-- [ ] **Pause/resume button** — needed on both the mic and upload audio interfaces; mic should mute analysis (not stop stream), file audio should pause/resume `AudioBufferSourceNode` playback and also pause the visual loop
-- [ ] **Cross-browser test** — Safari requires `audioContext.resume()` inside a click; test mic + file on Safari 17+
-- [ ] **Mobile check** — reduce `fftSize` to 1024 on small screens, verify touch controls work
-- [ ] **Error states** — mic permission denied banner, file format unsupported warning
+- [x] Landing screen with microphone and upload paths.
+- [x] Energy indicator and behavior state feedback.
+- [x] Gesture discovery feedback.
+- [x] Canvas recording through MediaRecorder.
+- [x] Fullscreen and hidden-overlay behavior.
 
-### Visual Polish
-- [ ] **Mode 1 (Radial) tuning** — the polar mode is functional but visually weaker than Mode 0; FBM parameters could be tweaked specifically for it
-- [ ] **Idle animation without audio** — currently the shader animates slowly with no audio (good), but color palette feels flat; consider a gentle automatic color drift
-- [ ] **Particle color variety** — currently teal/green only; could tint towards violet at low velocity
+### Documentation
 
-### Architecture
-- [ ] **Bundle size** — Three.js is 913KB minified; consider tree-shaking unused Three.js modules (no OrbitControls, no loaders, etc.)
-- [ ] **Performance validation** — measure actual FPS on mid-range hardware; if below 55fps, consider reducing FBM octaves from 6 → 5 or dropping trail pass resolution
+- [x] `AGENTS.md` is the universal source of truth.
+- [x] `CLAUDE.md` is a thin Claude-specific wrapper.
+- [x] `PLAN.md` is the execution ledger and guardrail map.
+- [x] `.claude/rules/` contains path-scoped technical contracts.
+- [x] Stale root planning artifacts archived under `.claude/archive/`.
 
-### Future Ideas (post-MVP)
-- [ ] Beat detection → camera pulse/flash on kick
-- [ ] Preset system (save named configurations)
-- [ ] MIDI controller support via Web MIDI API
-- [ ] Export a GIF/video clip of a session
-- [ ] PWA manifest so it can be installed as a desktop app
+## Current Follow-Ups
 
----
-
-## Known Issues
-
-| Issue | Status | Notes |
-|-------|--------|-------|
-| Vertex shader missing attribute declarations | Fixed | `psychedelic.vert` now declares `attribute vec3 position; attribute vec2 uv;` |
-| `dt` double-getDelta bug | Fixed | Particle age update uses hardcoded `1/60` |
-| Particle x-position out of camera bounds | Fixed | Removed aspect multiplier from spawn position |
-| WebGL feedback loop (read+write same texture) | Fixed | Third independent `WebGLRenderTarget` (rtC) added; ping-pong between rtB/rtC |
-| `history.replaceState` SecurityError (>100 calls/10s) | Fixed | `lastUrl` cache prevents calling `replaceState` on 60fps audio updates |
-| File audio silent (no speaker output) | Fixed | `connectSource(source, true)` now also connects to `ctx.destination` |
-| React StrictMode double WebGL context destruction | Fixed | Removed `<StrictMode>` from `main.jsx` |
-
----
+- [ ] Cross-browser test Safari and Chromium for mic/file audio permissions.
+- [ ] Mobile check for touch interaction, control layout, and WebGL performance.
+- [ ] Error states for mic permission denied and unsupported audio file formats.
+- [ ] Performance validation on mid-range hardware.
+- [ ] Visual tuning pass using calm, mid, and peak screenshots.
 
 ## Architecture Quick Reference
 
-```
-Audio → useAudioAnalyser → Zustand store (getState 60fps)
-                                ↓
-                        useThreeScene tick()
-                                ↓
-          Pass 1: psychedelic.frag → rtA
-          Pass 2: trail.frag (rtA + trailRead × 0.82) → trailWrite
-          Pass 3: trailWrite → screen
-          Particles: cpu update → Points render (additive, no depth)
-          Swap trailRead/trailWrite (rtB ↔ rtC)
+```text
+Audio -> useAudioAnalyser -> Zustand store via getState()
+                                  |
+                                  v
+                         useThreeScene tick()
+                                  |
+                                  v
+        Pass 1: psychedelic.frag -> rtA
+        Pass 2: trail.frag blends rtA + trailRead -> trailWrite
+        Pass 3: trailWrite -> screen
+        Particles: additive Points render on top
+        Swap trailRead/trailWrite
 ```
 
-## File Map
+## Known Resolved Issues
 
-| File | Role |
-|------|------|
-| `src/shaders/psychedelic.frag` | Main visual — FBM, palette, domain warp |
-| `src/shaders/psychedelic.vert` | Full-screen quad vertex shader |
-| `src/hooks/useThreeScene.js` | Render loop, uniform updates, ping-pong |
-| `src/hooks/useAudioAnalyser.js` | FFT → band extraction → store writes |
-| `src/store/useStore.js` | Single Zustand store |
-| `src/utils/shareUtils.js` | URL serialization/deserialization |
-| `src/components/ControlPanel.jsx` | Slider UI |
-| `src/components/AudioInput.jsx` | Mic / file selector |
+| Issue | Status |
+|---|---|
+| Raw shader precision and attribute declarations | Fixed |
+| WebGL feedback loop from reading/writing the same trail target | Fixed |
+| URL `history.replaceState` rate limit | Fixed |
+| File audio analyser-only routing with no speaker output | Fixed |
+| React StrictMode double WebGL context cleanup in dev | Fixed |
+| Mode-family hard palette jumps | Fixed |
+| Preset mutation/default coupling for new controls | Fixed |

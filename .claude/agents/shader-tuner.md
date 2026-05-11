@@ -20,8 +20,8 @@ You can change the shader, tweak palette vectors, adjust FBM parameters, or rest
 
 ## Aesthetic constraints (non-negotiable)
 
-- Palette: teal / acid green / deep violet on near-black (`#050505`)
-- No full rainbow gradients, warm hues (red/orange/magenta), or strobing
+- Palette: open cyan / violet / magenta / acid-green spectrum on near-black (`#050505`)
+- No full rainbow gradients, warm red/orange dominance, or strobing
 - Motion: slow, breathing, continuous — never static, never jittery
 - Forms: smooth blob-like shapes, no sharp geometric edges
 
@@ -55,6 +55,6 @@ If a proposed change risks dropping frame rate, say so and propose a cheaper alt
 ## Don't
 
 - Don't add new uniforms unless explicitly asked — they need wiring in the React side too.
-- Don't introduce raymarching or SDFs — out of scope for the current pipeline.
+- Don't replace the existing raymarching or SDF structure without explicit architecture approval.
 - Don't change `trail.frag`'s decay value without flagging it.
 - Don't write a comment explaining what GLSL math does — it's self-explanatory to anyone reading shader code.

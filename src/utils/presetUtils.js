@@ -2,6 +2,17 @@ export const STORAGE_KEY = 'psychedelic_presets'
 
 const ADJS  = ['Acid', 'Teal', 'Void', 'Deep', 'Flux', 'Cyan', 'Neon', 'Dark', 'Wild', 'Pure']
 const NOUNS = ['Drift', 'Surge', 'Pulse', 'Field', 'Bloom', 'Wave', 'Storm', 'Flow', 'Dream', 'Core']
+const PARAM_DEFAULTS = {
+  speed: 0.4,
+  intensity: 0.7,
+  colorShift: 0.0,
+  chaos: 0.5,
+  mode: 0,
+  trailDecay: 0.84,
+  cameraDistance: 0,
+  procIntensity: 0.45,
+  particleDensity: 1,
+}
 
 function autoName(id) {
   const hash = id.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
@@ -22,7 +33,7 @@ export function savePresets(presets) {
 
 export function createPreset(params) {
   const id = crypto.randomUUID()
-  return { id, name: autoName(id), params: { ...params }, createdAt: Date.now() }
+  return { id, name: autoName(id), params: { ...PARAM_DEFAULTS, ...params }, createdAt: Date.now() }
 }
 
 const RANGES = {
@@ -30,11 +41,16 @@ const RANGES = {
   intensity:  { min: 0.1, max: 1.0 },
   colorShift: { min: 0.0, max: 1.0 },
   chaos:      { min: 0.0, max: 1.0 },
+  trailDecay: { min: 0.70, max: 0.94 },
+  cameraDistance: { min: -0.7, max: 0.9 },
+  procIntensity: { min: 0.0, max: 1.0 },
+  particleDensity: { min: 0.0, max: 2.0 },
 }
 
 export function mutatePreset(preset) {
-  const p = { ...preset.params }
+  const p = { ...PARAM_DEFAULTS, ...preset.params }
   for (const [key, { min, max }] of Object.entries(RANGES)) {
+    if (typeof p[key] !== 'number') continue
     const span = max - min
     p[key] = Math.min(max, Math.max(min, p[key] + (Math.random() * 2 - 1) * span * 0.25))
   }

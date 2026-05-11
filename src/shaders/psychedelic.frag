@@ -32,6 +32,9 @@ uniform float uBeatPhase;
 uniform float uPalettePhase;
 uniform vec4  uModeBlend;
 uniform float uCameraDistance;
+uniform float uSpectralCentroid;
+uniform float uSpectralFlux;
+uniform float uProcIntensity;
 // Slow-decaying sub-bass accumulator — adds lazy drift weight to camera position
 uniform vec2  uCamDrift;
 
@@ -371,6 +374,20 @@ void main() {
   float proxGlow = exp(-minD * minD * 18.0);
   float proxT    = fbm(sUV * 0.28 + vec2(t * 0.05, 0.0)) * 0.4 + 0.72 + uColorShift * 0.3;
   col += palette(proxT + 0.15) * proxGlow * (0.16 + uCoreEnergy * 0.30);
+
+  // Secondary procedural texture, gated by flux so transients reveal detail
+  // without flashing the whole frame.
+  float fluxLift = smoothstep(0.02, 0.42, uSpectralFlux) * uProcIntensity;
+  float cent = clamp(uSpectralCentroid, 0.0, 1.0);
+  vec2 procFlow = vec2(
+    noise(sUV * 0.55 + vec2(tBase * 0.08, cent * 1.7)),
+    noise(sUV * 0.50 + vec2(-cent * 1.3, tBase * -0.06))
+  );
+  float procN = 0.5 + 0.5 * noise(sUV * (0.85 + cent * 1.25) + procFlow * 0.42 + vec2(tBase * 0.05, -tBase * 0.04));
+  float procMask = smoothstep(0.38, 0.82, procN);
+  float localMask = hitDist > 0.0 ? 0.70 : smoothstep(0.08, 0.55, proxGlow);
+  float procStrength = (0.025 + fluxLift * 0.18) * uProcIntensity * localMask * (0.45 + uSurfaceEnergy * 0.65);
+  col += palette(procN * 0.22 + cent * 0.18 + uPalettePhase * 0.12 + 0.58) * procMask * procStrength;
 
   // ── Energy filaments: sparse curved streaks, visible only during energetic moments ──
   // Threshold FBM at a tight band → sparse arcs; mask by energy+force so they

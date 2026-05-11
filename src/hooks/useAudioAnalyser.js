@@ -17,6 +17,8 @@ export function useAudioAnalyser() {
     beatPhase: 0,
     beatConfidence: 0,
     latencySec: 0,
+    spectralCentroid: 0,
+    spectralFlux: 0,
   })
   const beatState = useRef({
     lastTime: 0,
@@ -26,6 +28,7 @@ export function useAudioAnalyser() {
     confidence: 0,
   })
   const scratchRef = useRef(null)
+  const previousFftRef = useRef(null)
 
   useEffect(() => {
     const SILENCE_FLOOR = 0.006
@@ -49,10 +52,12 @@ export function useAudioAnalyser() {
       if (analyser) {
         if (!scratchRef.current || scratchRef.current.length !== analyser.frequencyBinCount) {
           scratchRef.current = new Uint8Array(analyser.frequencyBinCount)
+          previousFftRef.current = new Uint8Array(analyser.frequencyBinCount)
         }
         const data = scratchRef.current
         analyser.getByteFrequencyData(data)
-        const raw = extractBands(data)
+        const raw = extractBands(data, previousFftRef.current)
+        previousFftRef.current.set(data)
         const now = performance.now() / 1000
         const b = beatState.current
         if (b.lastTime === 0) b.lastTime = now
@@ -64,6 +69,8 @@ export function useAudioAnalyser() {
         s.bass = ema(s.bass, gateBand(raw.bass), 0.78, 0.18)
         s.mid  = ema(s.mid,  gateBand(raw.mid),  0.65, 0.16)
         s.hi   = ema(s.hi,   gateBand(raw.hi),   0.82, 0.22)
+        s.spectralCentroid = ema(s.spectralCentroid, raw.spectralCentroid, 0.55, 0.08)
+        s.spectralFlux     = ema(s.spectralFlux,     raw.spectralFlux,     0.78, 0.20)
 
         const energy = Math.min(1, s.sub * 0.16 + s.bass * 0.44 + s.mid * 0.28 + s.hi * 0.12)
         const attack = 1 - Math.exp(-dt / 0.025)
