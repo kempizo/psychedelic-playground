@@ -41,8 +41,11 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    const onFsChange = () =>
-      setIsFullscreen(!!(document.fullscreenElement || document.webkitFullscreenElement))
+    const onFsChange = () => {
+      const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement)
+      setIsFullscreen(isFs)
+      setIsUIHidden(isFs)
+    }
     document.addEventListener('fullscreenchange', onFsChange)
     document.addEventListener('webkitfullscreenchange', onFsChange)
     return () => {
@@ -90,6 +93,7 @@ export default function App() {
               border: '1px solid rgba(0,200,160,0.2)',
               color: 'rgba(0,220,180,0.7)',
               opacity: isUIHidden ? 0.15 : 0.7,
+              pointerEvents: isUIHidden ? 'none' : 'auto',
               backdropFilter: 'blur(8px)',
             }}
           >

@@ -10,7 +10,7 @@ const CONTROLS = [
 const MODES = ['Fluid', 'Radial', 'Vortex', 'Collapse', 'Orbit']
 
 export default function ControlPanel({ onReset, isHidden }) {
-  const { speed, intensity, colorShift, chaos, mode, setControl } = useStore()
+  const { speed, intensity, colorShift, chaos, mode, setControl, resetControls } = useStore()
 
   const values = { speed, intensity, colorShift, chaos }
 
@@ -20,8 +20,19 @@ export default function ControlPanel({ onReset, isHidden }) {
         className="pointer-events-auto w-full max-w-xl rounded-2xl px-6 py-4 flex flex-col gap-3"
         style={{ background: 'rgba(5,5,5,0.75)', backdropFilter: 'blur(12px)', border: '1px solid rgba(0,200,170,0.15)' }}
       >
-        {onReset && (
-          <div className="flex justify-end -mb-1">
+        <div className="flex justify-end gap-2 -mb-1">
+          <button
+            onClick={resetControls}
+            className="text-xs font-mono px-3 py-1 rounded-full transition-all"
+            style={{
+              background: 'transparent',
+              border: '1px solid rgba(200,60,255,0.25)',
+              color: 'rgba(200,120,255,0.65)',
+            }}
+          >
+            Reset to default
+          </button>
+          {onReset && (
             <button
               onClick={onReset}
               className="text-xs font-mono px-3 py-1 rounded-full transition-all"
@@ -33,8 +44,8 @@ export default function ControlPanel({ onReset, isHidden }) {
             >
               Change source
             </button>
-          </div>
-        )}
+          )}
+        </div>
         {CONTROLS.map(({ key, label, min, max, step }) => (
           <div key={key} className="flex items-center gap-4">
             <span className="text-xs font-mono w-20 shrink-0" style={{ color: 'rgba(0,220,180,0.75)' }}>

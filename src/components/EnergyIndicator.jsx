@@ -19,12 +19,12 @@ export default function EnergyIndicator({ isHidden, isRecording }) {
 
   return (
     <>
-      {/* Edge glow: inset box-shadow so it hugs the canvas border */}
+      {/* Edge glow: constrained to a soft vignette so it does not read as a page border. */}
       <div
         className="fixed inset-0 pointer-events-none"
         style={{
-          boxShadow: `inset 0 0 60px 8px rgba(${hue}, ${opacity * 0.7})`,
-          transition: 'box-shadow 0.15s ease-out',
+          background: `radial-gradient(circle at 50% 50%, transparent 62%, rgba(${hue}, ${opacity * 0.18}) 100%)`,
+          transition: 'background 0.15s ease-out',
           zIndex: 10,
         }}
       />

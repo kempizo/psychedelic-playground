@@ -26,3 +26,6 @@ dist-ssr
 # Claude Code — local-only personal overrides (committed configs live in .claude/)
 .claude/settings.local.json
 CLAUDE.local.md
+
+# Visual iteration screenshots (local only, not committed)
+screenshots/

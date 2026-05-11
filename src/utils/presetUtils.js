@@ -38,7 +38,6 @@ export function mutatePreset(preset) {
     const span = max - min
     p[key] = Math.min(max, Math.max(min, p[key] + (Math.random() * 2 - 1) * span * 0.25))
   }
-  p.mode = Math.random() < 0.2 ? 1 - p.mode : p.mode
   return createPreset(p)
 }
 

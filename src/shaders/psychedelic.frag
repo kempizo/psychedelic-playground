@@ -25,6 +25,13 @@ uniform float uPaletteShift;
 uniform float uBassMid;
 uniform float uMidHi;
 uniform float uBassHi;
+uniform float uCoreEnergy;
+uniform float uSurfaceEnergy;
+uniform float uParticleEnergy;
+uniform float uBeatPhase;
+uniform float uPalettePhase;
+uniform vec4  uModeBlend;
+uniform float uCameraDistance;
 // Slow-decaying sub-bass accumulator — adds lazy drift weight to camera position
 uniform vec2  uCamDrift;
 
@@ -81,7 +88,7 @@ float fbm3(vec3 p) {
 // uPaletteShift adds a transient break-event shift on top.
 // Brightness is localized (dark base + mid-amplitude swing); no full-frame colour flashes.
 vec3 palette(float t) {
-  float phaseOffset = uPaletteFamilyBlend * 0.33 + uPaletteShift * 0.20;
+  float phaseOffset = uPaletteFamilyBlend * 0.33 + uPaletteShift * 0.20 + uPalettePhase * 0.16;
   t += phaseOffset;
   vec3 a = vec3(0.50, 0.45, 0.55);
   vec3 b = vec3(0.50, 0.50, 0.50);
@@ -93,16 +100,18 @@ vec3 palette(float t) {
 // ── SDF: organic blob ──────────────────────────────────────────────────────────
 // tBase param is the slow evolution time used for the ambient breathing term
 float sdfBlob(vec3 p, float t, float tBase, float bass, float mid, float chaos) {
-  float warp = chaos * 1.4 + 0.3;
+  float warp = chaos * (1.0 + uSurfaceEnergy * 0.55) + 0.3;
   vec3 q = p + warp * 0.35 * vec3(
     sin(p.y * 2.1 + t * 1.1) + cos(p.z * 1.7 + t * 0.8),
     cos(p.x * 1.9 + t * 0.7) + sin(p.z * 2.3 + t * 1.2),
     sin(p.x * 1.5 + t * 0.9) + cos(p.y * 2.7 + t * 0.6)
   );
-  float disp = fbm3(q * 1.2 + t * 0.15) * (0.28 + mid * 0.40 + bass * 0.18 + uBassMid * 0.22);
+  float coreFlow = fbm3(q * 0.72 + tBase * 0.08) * (0.18 + uCoreEnergy * 0.22);
+  float surfaceFlow = fbm3(q * (1.45 + uSurfaceEnergy * 0.55) + t * 0.17) * (0.12 + mid * 0.20 + uSurfaceEnergy * 0.22);
+  float disp = coreFlow + surfaceFlow + uBassMid * 0.10;
   // Two incommensurate sinusoids ensure the orb is always alive at silence
   float breath = sin(tBase * 0.7) * 0.015 + sin(tBase * 0.31) * 0.008;
-  return (length(q) - (0.85 + bass * 0.28 + disp + breath)) * 0.70;
+  return (length(q) - (0.86 + uCoreEnergy * 0.24 + bass * 0.12 + disp + breath)) * 0.70;
 }
 
 // Orbit mode: three copies of blob 120° apart, collapse via min
@@ -192,13 +201,18 @@ void main() {
 
   // ── Mandala / radial influence layer ──────────────────────────────────────
   // Biases the FBM warp toward radial direction during peak/break. Never perfect.
-  float radialBias = uEnergy * smoothstep(0.3, 0.85, uEnergy) * uPaletteShift * 0.6
-                   + uEnergy * smoothstep(0.6, 1.0, uEnergy) * 0.25;
+  float radialBias = uEnergy * smoothstep(0.3, 0.85, uEnergy) * uPaletteShift * 0.45
+                   + uCoreEnergy * smoothstep(0.3, 1.0, uCoreEnergy) * 0.14
+                   + uModeBlend.x * 0.18;
   float sectorCount = 5.0 + sin(uTime * 0.07) * 2.0;
   vec2  radialP     = ndcUV;
   float radialAngle = atan(radialP.y, radialP.x);
   float mandalaWarp = sin(radialAngle * sectorCount + uTime * 0.3) * radialBias * 0.06;
   sUV += normalize(radialP + vec2(0.0001)) * mandalaWarp;
+
+  float smoothSpin = (uModeBlend.y * (0.10 + uCoreEnergy * 0.24)) * (1.0 - smoothstep(0.0, 1.8, length(sUV)));
+  float smoothSpinAngle = atan(sUV.y, sUV.x) + smoothSpin;
+  sUV = mix(sUV, vec2(cos(smoothSpinAngle), sin(smoothSpinAngle)) * length(sUV), uModeBlend.y * 0.18);
 
   // ── Virtual camera ─────────────────────────────────────────────────────────
   vec3 ro, rd;
@@ -207,7 +221,7 @@ void main() {
     // Fluid: orbit camera outside the blob
     float orbit = t * 0.55 + uSub * 0.8;
     float tilt  = cos(t * 0.30) * 0.55 + sin(t * 0.13) * 0.18;
-    float dist  = 2.8 - uBass * 0.55;
+    float dist  = mix(2.8, uCameraDistance, 0.45) - uCoreEnergy * 0.35;
 
     ro = vec3(sin(orbit) * dist + uCamDrift.x, tilt + uMouse.y * 0.45, cos(orbit) * dist + uCamDrift.y);
     vec3 target  = vec3(uMouse.x * 0.45, uMouse.y * 0.25, 0.0);
@@ -224,7 +238,7 @@ void main() {
     vec2  sUV2  = vec2(cos(a2d), sin(a2d)) * r2d * (1.0 - uSub * 0.08);
 
     float orbit2 = t * 0.80 + uSub * 0.6;
-    float dist2  = 1.2 - uBass * 0.30;
+    float dist2  = mix(1.2, uCameraDistance, 0.45) - uCoreEnergy * 0.18;
     ro = vec3(sin(orbit2) * dist2 + uCamDrift.x,
               cos(t * 0.35) * dist2 * 0.55 + uMouse.y * 0.35,
               cos(orbit2) * dist2 + uCamDrift.y);
@@ -244,7 +258,7 @@ void main() {
     vec2  sUV2  = vec2(cos(a2d), sin(a2d)) * r2d;
 
     float orbit = vortexAngle;
-    float dist  = 2.2 - uBass * 0.45;
+    float dist  = mix(2.2, uCameraDistance, 0.45) - uCoreEnergy * 0.28;
     ro = vec3(sin(orbit) * dist + uCamDrift.x, cos(t * 0.22) * 0.7 + uMouse.y * 0.5, cos(orbit) * dist + uCamDrift.y);
     vec3 fwd     = normalize(-ro + vec3(uMouse.x * 0.3, 0.0, 0.0));
     vec3 worldUp = abs(fwd.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
@@ -254,7 +268,7 @@ void main() {
 
   } else if (uMode == 3) {
     // Collapse: ray origin oscillates inward on bass kick, outward on mid
-    float collapseZ = 2.4 - uBass * 0.6 + uMid * 0.35;
+    float collapseZ = mix(2.4, uCameraDistance, 0.45) - uCoreEnergy * 0.40 + uSurfaceEnergy * 0.24;
     float orbit = tBase * 0.45 + uSub * 0.5;
     float tilt  = sin(tBase * 0.28) * 0.40 + uMouse.y * 0.4;
     ro = vec3(sin(orbit) * collapseZ + uCamDrift.x, tilt, cos(orbit) * collapseZ + uCamDrift.y);
@@ -269,7 +283,7 @@ void main() {
     // Orbit (mode 4): standard Fluid-like camera, SDF uses 3-copy orbit
     float orbit = t * 0.50 + uSub * 0.7;
     float tilt  = cos(t * 0.27) * 0.50 + sin(t * 0.15) * 0.15;
-    float dist  = 3.0 - uBass * 0.4;
+    float dist  = mix(3.0, uCameraDistance, 0.45) - uCoreEnergy * 0.24;
     ro = vec3(sin(orbit) * dist + uCamDrift.x, tilt + uMouse.y * 0.40, cos(orbit) * dist + uCamDrift.y);
     vec3 target  = vec3(uMouse.x * 0.40, uMouse.y * 0.20, 0.0);
     vec3 fwd     = normalize(target - ro);
@@ -309,29 +323,27 @@ void main() {
   vec3 col = vec3(0.0);
 
   if (hitDist > 0.0) {
-    // ── Surface: diffuse + Fresnel rim ──────────────────────────────────────
+    // ── Surface: diffuse volume + gated detail ──────────────────────────────
     vec3  p    = ro + rd * hitDist;
     vec3  nrm  = calcNormal(p, tJitter, tBase, uBass, uMid, uChaos, uMode);
     vec3  lDir = normalize(vec3(sin(t * 0.35) * 1.2, 0.8, cos(t * 0.35) * 1.2));
 
-    float diff    = max(0.0, dot(nrm, lDir)) * 0.65 + 0.18;
+    float diff    = max(0.0, dot(nrm, lDir)) * 0.48 + 0.26 + uCoreEnergy * 0.12;
 
     // t driven by value + energy + depth: foreground/high-energy → magenta/cyan
     float noiseV  = fbm3(p * 0.55 + t * 0.08);
+    float surfaceDetail = fbm3(p * (2.0 + uSurfaceEnergy * 1.4) + tDetail * 0.18);
     float surfDepth = clamp(hitDist / maxDist, 0.0, 1.0);
     float ct      = noiseV * 0.25 + uEnergy * 0.30 + (1.0 - surfDepth) * 0.25
-                  + uPaletteShift * 0.20 + uColorShift * 0.25 + uMidHi * 0.10;
+                  + uPaletteShift * 0.20 + uColorShift * 0.25 + uMidHi * 0.10
+                  + surfaceDetail * uSurfaceEnergy * 0.12;
 
     col  = palette(ct) * diff;
-    float rimTight = pow(1.0 - abs(dot(nrm, -rd)), 4.5);
-    float rimWide  = pow(1.0 - abs(dot(nrm, -rd)), 1.8);
-    // Foreground rim is stronger — gives vanishing-perspective look
-    float rimBoost = mix(1.8, 0.8, surfDepth);
-    col += palette(ct + 0.32) * rimTight * (1.4 + uHi * 1.0) * rimBoost;
-    col += palette(ct + 0.55) * rimWide  * 0.18;
-    col += vec3(0.9, 1.0, 0.95) * rimTight * 0.06;
-    col += palette(ct + 0.50) * 0.06;
-    col += uBass * 0.30 * palette(ct + 0.15) * 0.4;
+    col += palette(ct + 0.18) * surfaceDetail * uSurfaceEnergy * 0.14;
+    float viewSoft = pow(1.0 - abs(dot(nrm, -rd)), 2.6);
+    col += palette(ct + 0.35) * viewSoft * (0.12 + uHi * 0.08) * (1.0 - surfDepth * 0.35);
+    col += palette(ct + 0.50) * 0.05;
+    col += uCoreEnergy * palette(ct + 0.15) * 0.16;
     col *= (1.0 - surfDepth * 0.15);
     // Atmospheric fog: blend toward near-black at depth
     col  = mix(col, fogColor, smoothstep(0.3, 0.9, surfDepth));
@@ -339,29 +351,31 @@ void main() {
   } else {
     // ── Volumetric glow: near-miss rays accumulate fog ───────────────────────
     // Glow stronger in foreground (small depth01), fades at back
-    float glowStr = mix(0.80, 0.40, depth01);
-    float glow    = exp(-minD * 3.5) * glowStr;
+    float glowStr = mix(0.48, 0.24, depth01);
+    float glow    = exp(-minD * 2.4) * glowStr;
     vec2 bgFlow = vec2(
       sin(t * 0.04 + sUV.y * 0.65) * 0.18,
       cos(t * 0.035 + sUV.x * 0.55) * 0.14
     );
-    float bgT = fbm(sUV * 0.35 + bgFlow) * 0.4 + 0.72 + uColorShift * 0.3;
-    col  = palette(bgT) * glow * (0.45 + uBass * 0.55);
-    col += palette(bgT + 0.50) * 0.07;
-    col *= (1.0 - depthFog * 0.45);
-    col += palette(bgT + 0.30) * depthFog * 0.07 * (0.3 + uBass * 0.2);
+    float bgN = fbm(sUV * 0.42 + bgFlow + vec2(uPalettePhase * 0.05, -uPalettePhase * 0.03));
+    float bgT = bgN * 0.36 + 0.72 + uColorShift * 0.3;
+    vec3 bgFog = palette(bgT + 0.12) * (0.020 + bgN * 0.026 + uCoreEnergy * 0.018);
+    col  = palette(bgT) * glow * (0.26 + uCoreEnergy * 0.28);
+    col += bgFog;
+    col *= (1.0 - depthFog * 0.34);
+    col += palette(bgT + 0.30) * depthFog * 0.035 * (0.4 + uCoreEnergy * 0.2);
     col  = mix(col, fogColor, smoothstep(0.5, 1.0, depth01));
   }
 
   // ── Subsurface proximity glow ─────────────────────────────────────────────
   float proxGlow = exp(-minD * minD * 18.0);
   float proxT    = fbm(sUV * 0.28 + vec2(t * 0.05, 0.0)) * 0.4 + 0.72 + uColorShift * 0.3;
-  col += palette(proxT + 0.15) * proxGlow * (0.35 + uBass * 0.45);
+  col += palette(proxT + 0.15) * proxGlow * (0.16 + uCoreEnergy * 0.30);
 
   // ── Energy filaments: sparse curved streaks, visible only during energetic moments ──
   // Threshold FBM at a tight band → sparse arcs; mask by energy+force so they
   // only surface during peaks. No second pass needed — lives in the same shader.
-  float energyMask = clamp(forceEnergySum + uEnergy * 1.2 + uBassHi * 0.8, 0.0, 1.0);
+  float energyMask = clamp(forceEnergySum + uSurfaceEnergy * 0.9 + uParticleEnergy * 0.35 + uBassHi * 0.45, 0.0, 1.0);
   if (energyMask > 0.05) {
     vec2  filUV  = sUV * 3.8 + vec2(t * 0.06, t * -0.04);
     float filN   = fbm(filUV);
@@ -371,7 +385,7 @@ void main() {
   }
 
   // ── Force-energy brightness: forces locally amplify field brightness ────────
-  col += palette(t * 0.4 + 0.5) * forceEnergySum * 0.45;
+  col += palette(t * 0.4 + 0.5) * forceEnergySum * 0.30;
   col += palette(t * 0.4 + 0.5) * uColorSpike * 0.25;
 
   // ── Mouse energy ripple ────────────────────────────────────────────────────
@@ -379,11 +393,11 @@ void main() {
   col += palette(t * 0.4 + 0.5) * exp(-mDist * 2.5) * uMouseVel * 0.55;
 
   // ── Hi shimmer + intensity ─────────────────────────────────────────────────
-  col += uHi * 0.14 * vec3(0.0, 0.75, 0.60);
+  col += uHi * 0.08 * vec3(0.0, 0.75, 0.60);
   col *= 0.55 + uIntensity * 0.65;
 
   // ── Vignette ───────────────────────────────────────────────────────────────
-  float vig = 1.0 - smoothstep(0.40, 1.35, length(vUv * 2.0 - 1.0));
+  float vig = 1.0 - smoothstep(0.72, 1.55, length(vUv * 2.0 - 1.0)) * 0.78;
   col *= vig;
 
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);

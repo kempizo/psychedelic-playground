@@ -31,6 +31,13 @@ export class BehavioralController {
 
     this.breakEvent = { active: false, timer: 0, duration: 0, intensity: 0 }
     this.breakIntensity = 0
+
+    // Slow drift LFOs — three relatively-prime periods so they never repeat together
+    this.lfoT = 0  // accumulates real time for LFO phases
+
+    // Formation event: structural mode bias triggered by sustained high energy
+    this.highEnergyTimer = 0
+    this.formation = { active: false, timer: 0, duration: 3.0, bias: 0 }
   }
 
   _updateEnergy(audioData, dt) {
@@ -73,10 +80,23 @@ export class BehavioralController {
 
   _computeDrift() {
     const t = this.driftT
-    return {
-      speed:     Math.sin(t * 0.031)          * 0.06,
+    // Fast micro-drift (existing): subtle per-frame variation
+    const fast = {
+      speed:     Math.sin(t * 0.031)         * 0.06,
       chaos:     Math.sin(t * 0.019 + 1.71)  * 0.05,
       intensity: Math.sin(t * 0.023 + 3.20)  * 0.04,
+    }
+    // Slow LFOs: 37s, 71s, 113s — relatively prime, never repeat the same pattern
+    const lt = this.lfoT
+    const lfo37  = Math.sin((lt / 37)  * Math.PI * 2)
+    const lfo71  = Math.sin((lt / 71)  * Math.PI * 2 + 1.1)
+    const lfo113 = Math.sin((lt / 113) * Math.PI * 2 + 2.7)
+    return {
+      speed:       fast.speed,
+      intensity:   fast.intensity,
+      chaos:       fast.chaos + lfo37  * 0.12,   // macro warp breathes over 37s
+      paletteDrift: lfo71  * 0.15,                // hue bias wanders over 71s
+      forceBias:   lfo113,                         // -1→1: pull vs push bias over 113s
     }
   }
 
@@ -110,6 +130,34 @@ export class BehavioralController {
           intensity: 0.4 + Math.random() * 0.5,
         }
         this.breakIntensity = 1.0
+      }
+    }
+  }
+
+  _updateFormation(dt) {
+    if (this.energy > 0.7) {
+      this.highEnergyTimer += dt
+    } else {
+      this.highEnergyTimer = Math.max(0, this.highEnergyTimer - dt * 2)
+    }
+
+    if (!this.formation.active && this.highEnergyTimer > 2.0 && Math.random() < 0.008 * dt) {
+      this.formation = { active: true, timer: 0, duration: 3.0 + Math.random() * 2.0, bias: 0 }
+      this.highEnergyTimer = 0
+    }
+
+    if (this.formation.active) {
+      this.formation.timer += dt
+      const p = this.formation.timer / this.formation.duration
+      // Ramp in over 15%, hold, ramp out over last 20%
+      this.formation.bias = p < 0.15
+        ? p / 0.15
+        : p > 0.80
+          ? 1.0 - (p - 0.80) / 0.20
+          : 1.0
+      if (this.formation.timer >= this.formation.duration) {
+        this.formation.active = false
+        this.formation.bias = 0
       }
     }
   }
@@ -150,9 +198,11 @@ export class BehavioralController {
     }
 
     this.driftT    += dt
+    this.lfoT      += dt
     this.colorPhase = (this.colorPhase + dt * 0.002) % 1.0
 
     this._updateBreakEvent(dt)
+    this._updateFormation(dt)
     this.userIdleTimer += dt
     this.autoTimer     += dt
 
@@ -192,6 +242,9 @@ export class BehavioralController {
       isSilence:      this.silenceTimer > 2,
       breakIntensity: this.breakIntensity,
       virtualPulse,
+      paletteDrift:   drift.paletteDrift  ?? 0,
+      forceBias:      drift.forceBias     ?? 0,
+      formationBias:  this.formation.bias,
     }
   }
 }

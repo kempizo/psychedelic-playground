@@ -1,16 +1,32 @@
 import { create } from 'zustand'
 import { loadPresets, savePresets, createPreset, mutatePreset } from '../utils/presetUtils'
 
-const useStore = create((set, get) => ({
-  // Audio data — written directly via getState() to skip re-renders
-  audioData: { sub: 0, bass: 0, mid: 0, hi: 0 },
-
-  // UI controls
+const DEFAULT_CONTROLS = {
   speed: 0.4,
   intensity: 0.7,
   colorShift: 0.0,
   chaos: 0.5,
   mode: 0,
+}
+
+const useStore = create((set, get) => ({
+  // Audio data — written directly via getState() to skip re-renders
+  audioData: {
+    sub: 0,
+    bass: 0,
+    mid: 0,
+    hi: 0,
+    energy: 0,
+    energyEnvelope: 0,
+    predictedEnergy: 0,
+    onset: 0,
+    beatPhase: 0,
+    beatConfidence: 0,
+    latencySec: 0,
+  },
+
+  // UI controls
+  ...DEFAULT_CONTROLS,
 
   // Audio source state
   audioSource: null,   // 'mic' | 'file' | null
@@ -33,6 +49,7 @@ const useStore = create((set, get) => ({
 
   setAudioData: (data) => set({ audioData: data }),
   setControl: (key, value) => set({ [key]: value }),
+  resetControls: () => set({ ...DEFAULT_CONTROLS, activePresetId: null }),
   setAudioSource: (source) => set({ audioSource: source }),
   setIsPlaying: (v) => set({ isPlaying: v }),
   setEnergySnapshot: ({ energy, state, breakIntensity }) =>
