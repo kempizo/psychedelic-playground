@@ -8,17 +8,25 @@ export function useAudioAnalyser() {
   const smoothed = useRef({
     sub: 0,
     bass: 0,
+    lowMid: 0,
     mid: 0,
+    highMid: 0,
+    treble: 0,
     hi: 0,
+    rms: 0,
     energy: 0,
     energyEnvelope: 0,
     predictedEnergy: 0,
     onset: 0,
+    bassPulse: 0,
+    midPulse: 0,
+    treblePulse: 0,
     beatPhase: 0,
     beatConfidence: 0,
     latencySec: 0,
     spectralCentroid: 0,
     spectralFlux: 0,
+    silence: 1,
   })
   const beatState = useRef({
     lastTime: 0,
@@ -27,7 +35,13 @@ export function useAudioAnalyser() {
     beatInterval: 0.5,
     confidence: 0,
   })
+  const adaptive = useRef({
+    bass: 0.05,
+    mid: 0.05,
+    treble: 0.05,
+  })
   const scratchRef = useRef(null)
+  const waveformRef = useRef(null)
   const previousFftRef = useRef(null)
 
   useEffect(() => {
@@ -52,11 +66,18 @@ export function useAudioAnalyser() {
       if (analyser) {
         if (!scratchRef.current || scratchRef.current.length !== analyser.frequencyBinCount) {
           scratchRef.current = new Uint8Array(analyser.frequencyBinCount)
+          waveformRef.current = new Uint8Array(analyser.fftSize)
           previousFftRef.current = new Uint8Array(analyser.frequencyBinCount)
         }
         const data = scratchRef.current
+        const waveform = waveformRef.current
         analyser.getByteFrequencyData(data)
-        const raw = extractBands(data, previousFftRef.current)
+        analyser.getByteTimeDomainData(waveform)
+        const raw = extractBands(data, previousFftRef.current, {
+          sampleRate: analyser.context.sampleRate,
+          fftSize: analyser.fftSize,
+          waveform,
+        })
         previousFftRef.current.set(data)
         const now = performance.now() / 1000
         const b = beatState.current
@@ -67,18 +88,48 @@ export function useAudioAnalyser() {
         const s = smoothed.current
         s.sub  = ema(s.sub,  gateBand(raw.sub),  0.72, 0.16)
         s.bass = ema(s.bass, gateBand(raw.bass), 0.78, 0.18)
+        s.lowMid = ema(s.lowMid, gateBand(raw.lowMid), 0.66, 0.16)
         s.mid  = ema(s.mid,  gateBand(raw.mid),  0.65, 0.16)
+        s.highMid = ema(s.highMid, gateBand(raw.highMid), 0.72, 0.18)
+        s.treble = ema(s.treble, gateBand(raw.treble), 0.86, 0.24)
         s.hi   = ema(s.hi,   gateBand(raw.hi),   0.82, 0.22)
+        s.rms  = ema(s.rms,  gateBand(raw.rms),  0.58, 0.16)
         s.spectralCentroid = ema(s.spectralCentroid, raw.spectralCentroid, 0.55, 0.08)
         s.spectralFlux     = ema(s.spectralFlux,     raw.spectralFlux,     0.78, 0.20)
 
-        const energy = Math.min(1, s.sub * 0.16 + s.bass * 0.44 + s.mid * 0.28 + s.hi * 0.12)
+        const a = adaptive.current
+        const adaptRate = 1 - Math.exp(-dt / 3.5)
+        a.bass += (Math.max(0.025, s.bass) - a.bass) * adaptRate
+        a.mid += (Math.max(0.025, s.lowMid * 0.45 + s.mid * 0.55) - a.mid) * adaptRate
+        a.treble += (Math.max(0.025, s.highMid * 0.45 + s.treble * 0.55) - a.treble) * adaptRate
+
+        const energy = Math.min(1,
+          s.rms * 0.20 +
+          s.sub * 0.12 +
+          s.bass * 0.34 +
+          s.lowMid * 0.12 +
+          s.mid * 0.16 +
+          s.highMid * 0.04 +
+          s.treble * 0.02
+        )
         const attack = 1 - Math.exp(-dt / 0.025)
         const release = 1 - Math.exp(-dt / 0.42)
         s.energyEnvelope += (energy - s.energyEnvelope) * (energy > s.energyEnvelope ? attack : release)
 
+        const bassPulseRaw = Math.max(0, (s.bass - a.bass * 1.16) / Math.max(a.bass, 0.025))
+        const midPulseRaw = Math.max(0, ((s.lowMid * 0.4 + s.mid * 0.6) - a.mid * 1.12) / Math.max(a.mid, 0.025))
+        const treblePulseRaw = Math.max(0, ((s.highMid * 0.45 + s.treble * 0.55) - a.treble * 1.10) / Math.max(a.treble, 0.025))
+        s.bassPulse = ema(s.bassPulse, Math.min(1, bassPulseRaw * 0.65), 0.86, 0.18)
+        s.midPulse = ema(s.midPulse, Math.min(1, midPulseRaw * 0.55), 0.78, 0.18)
+        s.treblePulse = ema(s.treblePulse, Math.min(1, treblePulseRaw * 0.45), 0.90, 0.25)
+
         const onsetRaw = Math.max(0, energy - b.lastEnergy)
-        const onset = Math.max(0, Math.min(1, onsetRaw * 6.5 + Math.max(0, s.bass - b.lastEnergy) * 2.0))
+        const onset = Math.max(0, Math.min(1,
+          onsetRaw * 5.4 +
+          s.spectralFlux * 0.55 +
+          s.bassPulse * 0.35 +
+          s.treblePulse * 0.18
+        ))
         s.onset = ema(s.onset, onset, 0.75, 0.22)
 
         const minBeatGap = 0.24
@@ -109,6 +160,7 @@ export function useAudioAnalyser() {
           : 0
         s.beatConfidence = b.confidence
         s.energy = energy
+        s.silence = ema(s.silence, raw.silence && energy < 0.018 ? 1 : 0, 0.20, 0.35)
         b.lastEnergy = energy
 
         // Write directly — bypasses React re-render

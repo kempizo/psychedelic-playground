@@ -13,7 +13,7 @@ const VisualCanvas = forwardRef(function VisualCanvas(_, ref) {
     <canvas
       ref={canvasRef}
       className="fixed inset-0 w-full h-full"
-      style={{ display: 'block' }}
+      style={{ display: 'block', touchAction: 'none' }}
     />
   )
 })

@@ -3,9 +3,18 @@ precision highp float;
 uniform float uTime;
 uniform vec2  uResolution;
 uniform float uBass;
+uniform float uLowMid;
 uniform float uMid;
+uniform float uHighMid;
+uniform float uTreble;
 uniform float uHi;
 uniform float uSub;
+uniform float uRms;
+uniform float uOnset;
+uniform float uBassPulse;
+uniform float uMidPulse;
+uniform float uTreblePulse;
+uniform float uSilence;
 uniform float uSpeed;
 uniform float uIntensity;
 uniform float uColorShift;
@@ -67,7 +76,7 @@ float noise3(vec3 p) {
 // 6-octave 2D FBM. Top octave gated by energy+midHi so idle is smoother.
 float fbm(vec2 p) {
   float v = 0.0, a = 0.5, f = 1.0;
-  float topGate = mix(0.0, 1.0, smoothstep(0.10, 0.50, uEnergy + uMidHi * 0.4));
+  float topGate = mix(0.0, 1.0, smoothstep(0.10, 0.50, uEnergy + uMidHi * 0.4 + uTreblePulse * 0.16));
   for (int i = 0; i < 6; i++) {
     float contrib = a * noise(p * f);
     if (i == 5) contrib *= topGate;
@@ -103,18 +112,18 @@ vec3 palette(float t) {
 // ── SDF: organic blob ──────────────────────────────────────────────────────────
 // tBase param is the slow evolution time used for the ambient breathing term
 float sdfBlob(vec3 p, float t, float tBase, float bass, float mid, float chaos) {
-  float warp = chaos * (1.0 + uSurfaceEnergy * 0.55) + 0.3;
+  float warp = chaos * (1.0 + uSurfaceEnergy * 0.48 + uLowMid * 0.16) + 0.3 + uBassPulse * 0.06;
   vec3 q = p + warp * 0.35 * vec3(
     sin(p.y * 2.1 + t * 1.1) + cos(p.z * 1.7 + t * 0.8),
     cos(p.x * 1.9 + t * 0.7) + sin(p.z * 2.3 + t * 1.2),
     sin(p.x * 1.5 + t * 0.9) + cos(p.y * 2.7 + t * 0.6)
   );
-  float coreFlow = fbm3(q * 0.72 + tBase * 0.08) * (0.18 + uCoreEnergy * 0.22);
-  float surfaceFlow = fbm3(q * (1.45 + uSurfaceEnergy * 0.55) + t * 0.17) * (0.12 + mid * 0.20 + uSurfaceEnergy * 0.22);
-  float disp = coreFlow + surfaceFlow + uBassMid * 0.10;
+  float coreFlow = fbm3(q * (0.72 + uRms * 0.08) + tBase * 0.08) * (0.18 + uCoreEnergy * 0.22 + uBassPulse * 0.04);
+  float surfaceFlow = fbm3(q * (1.45 + uSurfaceEnergy * 0.45 + uHighMid * 0.18) + t * 0.17) * (0.12 + mid * 0.18 + uLowMid * 0.08 + uSurfaceEnergy * 0.20);
+  float disp = coreFlow + surfaceFlow + uBassMid * 0.08 + uMidPulse * 0.035;
   // Two incommensurate sinusoids ensure the orb is always alive at silence
   float breath = sin(tBase * 0.7) * 0.015 + sin(tBase * 0.31) * 0.008;
-  return (length(q) - (0.86 + uCoreEnergy * 0.24 + bass * 0.12 + disp + breath)) * 0.70;
+  return (length(q) - (0.86 + uCoreEnergy * 0.22 + bass * 0.10 + uBassPulse * 0.045 + disp + breath)) * 0.70;
 }
 
 // Orbit mode: three copies of blob 120° apart, collapse via min
@@ -193,7 +202,7 @@ void main() {
   }
   forceEnergySum = clamp(forceEnergySum, 0.0, 1.0);
   // Inject into screen UV so force disturbances feed into camera + FBM chain
-  sUV += forceDisplace * 0.18;
+  sUV += forceDisplace * (0.16 + uBassPulse * 0.04);
   sUV += uMouseDir * uMouseVel * 0.06;
 
   // Break-event shimmer: sinusoidal screen warp driven by uDistortionSpike
@@ -206,7 +215,8 @@ void main() {
   // Biases the FBM warp toward radial direction during peak/break. Never perfect.
   float radialBias = uEnergy * smoothstep(0.3, 0.85, uEnergy) * uPaletteShift * 0.45
                    + uCoreEnergy * smoothstep(0.3, 1.0, uCoreEnergy) * 0.14
-                   + uModeBlend.x * 0.18;
+                   + uModeBlend.x * 0.18
+                   + uBassPulse * 0.035;
   float sectorCount = 5.0 + sin(uTime * 0.07) * 2.0;
   vec2  radialP     = ndcUV;
   float radialAngle = atan(radialP.y, radialP.x);
@@ -335,14 +345,15 @@ void main() {
 
     // t driven by value + energy + depth: foreground/high-energy → magenta/cyan
     float noiseV  = fbm3(p * 0.55 + t * 0.08);
-    float surfaceDetail = fbm3(p * (2.0 + uSurfaceEnergy * 1.4) + tDetail * 0.18);
+    float surfaceDetail = fbm3(p * (2.0 + uSurfaceEnergy * 1.2 + uHighMid * 0.7) + tDetail * (0.16 + uTreble * 0.035));
     float surfDepth = clamp(hitDist / maxDist, 0.0, 1.0);
     float ct      = noiseV * 0.25 + uEnergy * 0.30 + (1.0 - surfDepth) * 0.25
-                  + uPaletteShift * 0.20 + uColorShift * 0.25 + uMidHi * 0.10
-                  + surfaceDetail * uSurfaceEnergy * 0.12;
+                  + uPaletteShift * 0.20 + uColorShift * 0.25 + uMidHi * 0.08
+                  + surfaceDetail * (uSurfaceEnergy * 0.10 + uMidPulse * 0.03)
+                  + uSpectralCentroid * 0.04;
 
     col  = palette(ct) * diff;
-    col += palette(ct + 0.18) * surfaceDetail * uSurfaceEnergy * 0.14;
+    col += palette(ct + 0.18) * surfaceDetail * (uSurfaceEnergy * 0.12 + uHighMid * 0.035);
     float viewSoft = pow(1.0 - abs(dot(nrm, -rd)), 2.6);
     col += palette(ct + 0.35) * viewSoft * (0.12 + uHi * 0.08) * (1.0 - surfDepth * 0.35);
     col += palette(ct + 0.50) * 0.05;
@@ -359,7 +370,7 @@ void main() {
     vec2 bgFlow = vec2(
       sin(t * 0.04 + sUV.y * 0.65) * 0.18,
       cos(t * 0.035 + sUV.x * 0.55) * 0.14
-    );
+    ) + vec2(uLowMid * 0.025, -uBassPulse * 0.018);
     float bgN = fbm(sUV * 0.42 + bgFlow + vec2(uPalettePhase * 0.05, -uPalettePhase * 0.03));
     float bgT = bgN * 0.36 + 0.72 + uColorShift * 0.3;
     vec3 bgFog = palette(bgT + 0.12) * (0.020 + bgN * 0.026 + uCoreEnergy * 0.018);
@@ -386,13 +397,13 @@ void main() {
   float procN = 0.5 + 0.5 * noise(sUV * (0.85 + cent * 1.25) + procFlow * 0.42 + vec2(tBase * 0.05, -tBase * 0.04));
   float procMask = smoothstep(0.38, 0.82, procN);
   float localMask = hitDist > 0.0 ? 0.70 : smoothstep(0.08, 0.55, proxGlow);
-  float procStrength = (0.025 + fluxLift * 0.18) * uProcIntensity * localMask * (0.45 + uSurfaceEnergy * 0.65);
+  float procStrength = (0.025 + fluxLift * 0.16 + uTreblePulse * 0.025) * uProcIntensity * localMask * (0.45 + uSurfaceEnergy * 0.62);
   col += palette(procN * 0.22 + cent * 0.18 + uPalettePhase * 0.12 + 0.58) * procMask * procStrength;
 
   // ── Energy filaments: sparse curved streaks, visible only during energetic moments ──
   // Threshold FBM at a tight band → sparse arcs; mask by energy+force so they
   // only surface during peaks. No second pass needed — lives in the same shader.
-  float energyMask = clamp(forceEnergySum + uSurfaceEnergy * 0.9 + uParticleEnergy * 0.35 + uBassHi * 0.45, 0.0, 1.0);
+  float energyMask = clamp(forceEnergySum + uSurfaceEnergy * 0.8 + uParticleEnergy * 0.32 + uBassHi * 0.38 + uMidPulse * 0.18, 0.0, 1.0);
   if (energyMask > 0.05) {
     vec2  filUV  = sUV * 3.8 + vec2(t * 0.06, t * -0.04);
     float filN   = fbm(filUV);
@@ -402,7 +413,7 @@ void main() {
   }
 
   // ── Force-energy brightness: forces locally amplify field brightness ────────
-  col += palette(t * 0.4 + 0.5) * forceEnergySum * 0.30;
+  col += palette(t * 0.4 + 0.5) * forceEnergySum * (0.26 + uBassPulse * 0.10);
   col += palette(t * 0.4 + 0.5) * uColorSpike * 0.25;
 
   // ── Mouse energy ripple ────────────────────────────────────────────────────
@@ -410,7 +421,8 @@ void main() {
   col += palette(t * 0.4 + 0.5) * exp(-mDist * 2.5) * uMouseVel * 0.55;
 
   // ── Hi shimmer + intensity ─────────────────────────────────────────────────
-  col += uHi * 0.08 * vec3(0.0, 0.75, 0.60);
+  float fineSpark = smoothstep(0.06, 0.75, uHighMid + uTreblePulse * 0.55) * (0.035 + uTreble * 0.025);
+  col += (uHi * 0.055 + fineSpark) * vec3(0.0, 0.75, 0.60);
   col *= 0.55 + uIntensity * 0.65;
 
   // ── Vignette ───────────────────────────────────────────────────────────────

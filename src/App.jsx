@@ -63,8 +63,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [started])
 
-  const uiOpacity = isUIHidden ? 0 : 1
-
   return (
     <div
       className="w-full h-full relative"
@@ -84,27 +82,28 @@ export default function App() {
           <DiscoveryToast />
 
           {/* Fullscreen toggle */}
-          <button
-            onClick={toggleFullscreen}
-            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-            className="fixed top-5 left-5 w-8 h-8 rounded flex items-center justify-center text-xs font-mono transition-all"
-            style={{
-              background: 'rgba(5,5,5,0.5)',
-              border: '1px solid rgba(0,200,160,0.2)',
-              color: 'rgba(0,220,180,0.7)',
-              opacity: isUIHidden ? 0.15 : 0.7,
-              pointerEvents: isUIHidden ? 'none' : 'auto',
-              backdropFilter: 'blur(8px)',
-            }}
-          >
-            {isFullscreen ? '⊡' : '⊞'}
-          </button>
+          {!isUIHidden && (
+            <button
+              onClick={toggleFullscreen}
+              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              className="fixed top-5 left-5 w-8 h-8 rounded flex items-center justify-center text-xs font-mono transition-all"
+              style={{
+                background: 'rgba(5,5,5,0.5)',
+                border: '1px solid rgba(0,200,160,0.2)',
+                color: 'rgba(0,220,180,0.7)',
+                opacity: 0.7,
+                backdropFilter: 'blur(8px)',
+              }}
+            >
+              {isFullscreen ? '⊡' : '⊞'}
+            </button>
+          )}
 
           {/* H-key hint when UI is hidden */}
           {isUIHidden && (
             <div
               className="fixed bottom-4 left-0 right-0 flex justify-center pointer-events-none"
-              style={{ opacity: uiOpacity === 0 ? 0.18 : 0 }}
+              style={{ opacity: 0.18 }}
             >
               <span className="text-xs font-mono" style={{ color: 'rgba(0,220,180,0.5)' }}>H to show UI</span>
             </div>

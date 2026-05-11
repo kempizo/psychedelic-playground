@@ -41,8 +41,18 @@ export class BehavioralController {
   }
 
   _updateEnergy(audioData, dt) {
-    const { sub, bass, mid, hi } = audioData
-    const rawEnergy = sub * 0.15 + bass * 0.45 + mid * 0.28 + hi * 0.12
+    const {
+      sub,
+      bass,
+      lowMid = 0,
+      mid,
+      highMid = 0,
+      treble = 0,
+      hi,
+      rms = 0,
+    } = audioData
+    const high = Math.max(hi, highMid * 0.72 + treble * 0.45)
+    const rawEnergy = rms * 0.18 + sub * 0.12 + bass * 0.36 + lowMid * 0.12 + mid * 0.16 + high * 0.06
     const alpha = 1 - Math.pow(0.98, dt * 60)
     this.energyPrev  = this.energy
     this.energy     += (rawEnergy - this.energy) * alpha
@@ -182,7 +192,8 @@ export class BehavioralController {
   tick(audioData, dt, userControls) {
     this._updateEnergy(audioData, dt)
 
-    const isSilence = audioData.sub + audioData.bass + audioData.mid + audioData.hi < 0.015
+    const isSilence = audioData.silence > 0.65 ||
+      audioData.sub + audioData.bass + (audioData.lowMid ?? 0) + audioData.mid + audioData.hi < 0.015
     if (isSilence) {
       this.silenceTimer += dt
     } else {

@@ -32,12 +32,18 @@ export function useURLState() {
   // replaceState rate limit (100 calls / 10s) and throw a SecurityError.
   useEffect(() => {
     if (!mounted.current) return
-    let lastUrl = ''
+    let lastUrl = serialize(useStore.getState())
     const unsub = useStore.subscribe((state) => {
       const url = serialize(state)
       if (url !== lastUrl) {
         lastUrl = url
-        window.history.replaceState(null, '', url)
+        try {
+          window.history.replaceState(null, '', url)
+        } catch (err) {
+          if (!(err instanceof DOMException && err.name === 'SecurityError')) {
+            throw err
+          }
+        }
       }
     })
     return unsub

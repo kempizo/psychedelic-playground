@@ -48,9 +48,18 @@ export function useThreeScene(canvasRef) {
       uTime:       { value: 0 },
       uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
       uBass:       { value: 0 },
+      uLowMid:     { value: 0 },
       uMid:        { value: 0 },
+      uHighMid:    { value: 0 },
+      uTreble:     { value: 0 },
       uHi:         { value: 0 },
       uSub:        { value: 0 },
+      uRms:        { value: 0 },
+      uOnset:      { value: 0 },
+      uBassPulse:  { value: 0 },
+      uMidPulse:   { value: 0 },
+      uTreblePulse:{ value: 0 },
+      uSilence:    { value: 1 },
       uSpeed:      { value: 0.4 },
       uIntensity:  { value: 0.7 },
       uColorShift: { value: 0 },
@@ -111,6 +120,9 @@ export function useThreeScene(canvasRef) {
       uDecay:   { value: 0.82 },
       uEnergy:  { value: 0 },
       uBeatPhase: { value: 0 },
+      uFlow: { value: 0 },
+      uOnset: { value: 0 },
+      uTreble: { value: 0 },
     }
     const trailMat = new THREE.RawShaderMaterial({
       vertexShader: passVert,
@@ -153,6 +165,8 @@ export function useThreeScene(canvasRef) {
         uParticleEnergy:{ value: 0 },
         uBeatPhase:     { value: 0 },
         uParticleDensity: { value: 1 },
+        uTreblePulse: { value: 0 },
+        uOnset: { value: 0 },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -194,6 +208,7 @@ export function useThreeScene(canvasRef) {
     const mouseDirSmooth = new THREE.Vector2(0, 0)
     let mouseVel = 0
     let cursorHideTimer = null
+    let activePointerId = null
 
     const resetCursorTimer = () => {
       clearTimeout(cursorHideTimer)
@@ -203,13 +218,20 @@ export function useThreeScene(canvasRef) {
       }, 3000)
     }
 
-    const onMouseMove = (e) => {
-      rawMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1
-      rawMouse.y = -((e.clientY / window.innerHeight) * 2 - 1)
-      if (isHolding) pushMousePos(rawMouse.x, rawMouse.y)
-      resetCursorTimer()
+    const updatePointerFromEvent = (e) => {
+      const rect = canvasRef.current.getBoundingClientRect()
+      rawMouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      rawMouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
     }
-    window.addEventListener('mousemove', onMouseMove)
+
+    const onPointerMove = (e) => {
+      resetCursorTimer()
+      if (!isHolding || e.pointerId !== activePointerId) return
+      e.preventDefault()
+      updatePointerFromEvent(e)
+      pushMousePos(rawMouse.x, rawMouse.y)
+    }
+    canvasRef.current.addEventListener('pointermove', onPointerMove)
 
     // ── Render loop ───────────────────────────────────────────────────────────
     let rafId
@@ -285,9 +307,14 @@ export function useThreeScene(canvasRef) {
       }
     }
 
-    const onMouseDown = (e) => {
-      const x = (e.clientX / window.innerWidth)  * 2 - 1
-      const y = -((e.clientY / window.innerHeight) * 2 - 1)
+    const onPointerDown = (e) => {
+      if (!e.isPrimary) return
+      e.preventDefault()
+      activePointerId = e.pointerId
+      canvasRef.current.setPointerCapture?.(e.pointerId)
+      updatePointerFromEvent(e)
+      const x = rawMouse.x
+      const y = rawMouse.y
       pushClickTime(performance.now())
       // Shift+click = pull (inward warp), normal click = push (outward)
       const sign = e.shiftKey ? -1 : 1
@@ -302,40 +329,16 @@ export function useThreeScene(canvasRef) {
       lastHoldSpawn = holdStartTime
       canvasRef.current.style.cursor = 'none'
     }
-    const onMouseUp = () => {
+    const onPointerUp = (e) => {
+      if (activePointerId !== null && e.pointerId !== activePointerId) return
       isHolding = false
+      if (activePointerId !== null) canvasRef.current.releasePointerCapture?.(activePointerId)
+      activePointerId = null
       canvasRef.current.style.cursor = ''
     }
-    canvasRef.current.addEventListener('mousedown', onMouseDown)
-    canvasRef.current.addEventListener('mouseup', onMouseUp)
-
-    const onTouchMove = (e) => {
-      e.preventDefault()
-      const t = e.touches[0]
-      const rect = canvasRef.current.getBoundingClientRect()
-      rawMouse.x = ((t.clientX - rect.left) / rect.width)  * 2 - 1
-      rawMouse.y = -((t.clientY - rect.top)  / rect.height) * 2 + 1
-      pushMousePos(rawMouse.x, rawMouse.y)
-      resetCursorTimer()
-    }
-    const onTouchStart = (e) => {
-      const t = e.touches[0]
-      const rect = canvasRef.current.getBoundingClientRect()
-      rawMouse.x = ((t.clientX - rect.left) / rect.width)  * 2 - 1
-      rawMouse.y = -((t.clientY - rect.top)  / rect.height) * 2 + 1
-      smoothedMouse.copy(rawMouse)
-      pushMousePos(rawMouse.x, rawMouse.y)
-      isHolding = true
-      holdStartTime = timer.getElapsed()
-      lastHoldSpawn = holdStartTime
-      spawnForce(rawMouse.x, rawMouse.y, 0.9, 1, 0.35, 0.6)
-    }
-    const onTouchEnd = () => {
-      isHolding = false
-    }
-    canvasRef.current.addEventListener('touchmove', onTouchMove, { passive: false })
-    canvasRef.current.addEventListener('touchstart', onTouchStart)
-    canvasRef.current.addEventListener('touchend', onTouchEnd)
+    canvasRef.current.addEventListener('pointerdown', onPointerDown)
+    canvasRef.current.addEventListener('pointerup', onPointerUp)
+    canvasRef.current.addEventListener('pointercancel', onPointerUp)
 
     // Smoothed control values — lerped toward behavioral targets each frame.
     const {
@@ -576,18 +579,32 @@ export function useThreeScene(canvasRef) {
       const aspect = window.innerWidth / window.innerHeight
 
       // Non-linear audio curves: quiet → subtle; peaks → strong reactions
-      const bassNL = Math.pow(Math.max(0, audioData.bass), 0.65) * 1.4
-      const midNL  = Math.pow(Math.max(0, audioData.mid),  0.80) * 1.2
-      const hiNL   = audioData.hi * audioData.hi * 2.5
+      const bassRaw = Math.max(0, audioData.bass)
+      const lowMidRaw = Math.max(0, audioData.lowMid ?? audioData.mid * 0.45)
+      const midRaw = Math.max(0, audioData.mid)
+      const highMidRaw = Math.max(0, audioData.highMid ?? audioData.hi * 0.7)
+      const trebleRaw = Math.max(0, audioData.treble ?? audioData.hi * 0.5)
+      const bassPulse = Math.max(0, audioData.bassPulse ?? audioData.onset ?? 0)
+      const midPulse = Math.max(0, audioData.midPulse ?? 0)
+      const treblePulse = Math.max(0, audioData.treblePulse ?? 0)
+      const rms = Math.max(0, audioData.rms ?? audioData.energy ?? 0)
+      const onset = Math.max(0, audioData.onset ?? 0)
+      const silence = Math.max(0, Math.min(1, audioData.silence ?? 0))
+      const bassNL = Math.pow(bassRaw + bassPulse * 0.10, 0.65) * 1.4
+      const lowMidNL = Math.pow(lowMidRaw, 0.76) * 1.15
+      const midNL  = Math.pow(midRaw + midPulse * 0.08,  0.80) * 1.2
+      const highMidNL = Math.pow(highMidRaw, 1.05) * 1.55
+      const trebleNL = Math.pow(trebleRaw + treblePulse * 0.08, 1.15) * 1.65
+      const hiNL   = Math.min(1.8, highMidNL * 0.75 + trebleNL * 0.85)
       const subNL  = Math.pow(Math.max(0, audioData.sub),  0.70) * 1.1
       const predictedEnergy = Math.max(audioData.predictedEnergy ?? audioData.energyEnvelope ?? 0, audioData.energy ?? 0)
       const beatPhase = audioData.beatPhase ?? 0
       const beatConfidence = audioData.beatConfidence ?? 0
       const beatPulse = Math.exp(-Math.pow(Math.min(beatPhase, 1 - beatPhase) * 6.0, 2.0)) * beatConfidence
 
-      const coreTarget = Math.min(1, predictedEnergy * 0.72 + subNL * 0.20 + bassNL * 0.18 + beatPulse * 0.10)
-      const surfaceTarget = Math.min(1, midNL * 0.52 + hiNL * 0.22 + (audioData.onset ?? 0) * 0.18 + predictedEnergy * 0.18)
-      const particleTarget = Math.min(1, predictedEnergy * 0.58 + hiNL * 0.22 + beatPulse * 0.28)
+      const coreTarget = Math.min(1, predictedEnergy * 0.58 + rms * 0.16 + subNL * 0.18 + bassNL * 0.18 + bassPulse * 0.14 + beatPulse * 0.10)
+      const surfaceTarget = Math.min(1, lowMidNL * 0.22 + midNL * 0.36 + highMidNL * 0.16 + onset * 0.14 + predictedEnergy * 0.16 + midPulse * 0.14)
+      const particleTarget = Math.min(1, predictedEnergy * 0.46 + highMidNL * 0.16 + trebleNL * 0.18 + treblePulse * 0.18 + beatPulse * 0.24)
       visualState.coreEnergy += (coreTarget - visualState.coreEnergy) * (1 - Math.exp(-dt / (coreTarget > visualState.coreEnergy ? 0.09 : 0.85)))
       visualState.surfaceEnergy += (surfaceTarget - visualState.surfaceEnergy) * (1 - Math.exp(-dt / (surfaceTarget > visualState.surfaceEnergy ? 0.16 : 0.45)))
       visualState.particleEnergy += (particleTarget - visualState.particleEnergy) * (1 - Math.exp(-dt / 0.32))
@@ -612,9 +629,9 @@ export function useThreeScene(canvasRef) {
 
       // Cross-band products: EMA smoothed, tau ~0.1s
       const crossLerp = 1 - Math.exp(-dt / 0.10)
-      smoothBassMid += (bassNL * midNL - smoothBassMid) * crossLerp
-      smoothMidHi   += (midNL  * hiNL  - smoothMidHi)  * crossLerp
-      smoothBassHi  += (bassNL * hiNL  - smoothBassHi)  * crossLerp
+      smoothBassMid += (bassNL * (lowMidNL * 0.45 + midNL * 0.55) - smoothBassMid) * crossLerp
+      smoothMidHi   += ((midNL * 0.55 + highMidNL * 0.45) * hiNL - smoothMidHi)  * crossLerp
+      smoothBassHi  += (bassNL * (highMidNL * 0.45 + trebleNL * 0.55) - smoothBassHi)  * crossLerp
 
       // bass+hi spike → inject a center force (kick + cymbal "pop")
       if (smoothBassHi > 0.35 && (elapsed - lastBassSpawn) > 0.4) {
@@ -633,9 +650,18 @@ export function useThreeScene(canvasRef) {
       // Update main uniforms
       mainUniforms.uTime.value       = elapsed
       mainUniforms.uBass.value       = bassNL * smoothed.intensity
+      mainUniforms.uLowMid.value     = lowMidNL * smoothed.intensity
       mainUniforms.uMid.value        = midNL  * smoothed.intensity
+      mainUniforms.uHighMid.value    = highMidNL * smoothed.intensity
+      mainUniforms.uTreble.value     = trebleNL * smoothed.intensity
       mainUniforms.uHi.value         = hiNL   * smoothed.intensity
       mainUniforms.uSub.value        = subNL  * smoothed.intensity
+      mainUniforms.uRms.value        = rms
+      mainUniforms.uOnset.value      = onset
+      mainUniforms.uBassPulse.value  = bassPulse
+      mainUniforms.uMidPulse.value   = midPulse
+      mainUniforms.uTreblePulse.value = treblePulse
+      mainUniforms.uSilence.value    = silence
       mainUniforms.uSpeed.value      = smoothed.speed
       mainUniforms.uIntensity.value  = smoothed.intensity
       mainUniforms.uColorShift.value = smoothed.colorShift
@@ -687,6 +713,8 @@ export function useThreeScene(canvasRef) {
       pMat.uniforms.uParticleEnergy.value = visualState.particleEnergy
       pMat.uniforms.uBeatPhase.value      = visualState.beatPhase
       pMat.uniforms.uParticleDensity.value = particleDensity
+      pMat.uniforms.uTreblePulse.value = treblePulse
+      pMat.uniforms.uOnset.value = onset
 
       mainUniforms.uColorSpike.value = Math.max(0, mainUniforms.uColorSpike.value * 0.951)
 
@@ -717,6 +745,9 @@ export function useThreeScene(canvasRef) {
       trailUniforms.uDecay.value = smoothTrailDecay
       trailUniforms.uEnergy.value = visualState.particleEnergy
       trailUniforms.uBeatPhase.value = visualState.beatPhase
+      trailUniforms.uFlow.value = Math.min(1, lowMidNL * 0.32 + midNL * 0.28 + bassPulse * 0.20 + visualState.surfaceEnergy * 0.35)
+      trailUniforms.uOnset.value = onset
+      trailUniforms.uTreble.value = Math.min(1, trebleNL)
 
       // Pass 1: main shader → rtA
       // Clear finalUniforms so Three.js doesn't keep trailWrite's texture bound
@@ -800,9 +831,15 @@ export function useThreeScene(canvasRef) {
           }
           // Curl noise: divergence-free field adds drift that matches the blob's flow
           const curl = curlNoise(px * 1.8, py * 1.8, elapsed)
-          const curlStrength = 0.00012 * (1 + smoothMidHi * 2.0)
+          const curlStrength = 0.00011 * (1 + smoothMidHi * 1.6 + lowMidNL * 1.1 + midPulse * 0.9)
           velocities[i].x += curl.x * curlStrength
           velocities[i].y += curl.y * curlStrength
+          const radialKick = bassPulse * 0.00018 + onset * 0.00008
+          if (radialKick > 0.0) {
+            const d = Math.sqrt(px * px + py * py) || 1
+            velocities[i].x += (px / d) * radialKick
+            velocities[i].y += (py / d) * radialKick
+          }
 
           positions[i * 3]     += velocities[i].x
           positions[i * 3 + 1] += velocities[i].y
@@ -869,12 +906,10 @@ export function useThreeScene(canvasRef) {
       clearTimeout(cursorHideTimer)
       resetGestureState()
       window.removeEventListener('resize', onResize)
-      window.removeEventListener('mousemove', onMouseMove)
-      canvasRef.current?.removeEventListener('mousedown', onMouseDown)
-      canvasRef.current?.removeEventListener('mouseup', onMouseUp)
-      canvasRef.current?.removeEventListener('touchmove', onTouchMove)
-      canvasRef.current?.removeEventListener('touchstart', onTouchStart)
-      canvasRef.current?.removeEventListener('touchend', onTouchEnd)
+      canvasRef.current?.removeEventListener('pointermove', onPointerMove)
+      canvasRef.current?.removeEventListener('pointerdown', onPointerDown)
+      canvasRef.current?.removeEventListener('pointerup', onPointerUp)
+      canvasRef.current?.removeEventListener('pointercancel', onPointerUp)
       renderer.dispose()
       mainMat.dispose()
       trailMat.dispose()
