@@ -484,9 +484,9 @@ void main() {
     col  = palette(ct) * diff;
     col += palette(ct + 0.18) * surfaceDetail * (uSurfaceEnergy * 0.12 + uHighMid * 0.035);
     float viewSoft = pow(1.0 - abs(dot(nrm, -rd)), 2.6);
-    col += palette(ct + 0.35) * viewSoft * (0.12 + uHi * 0.08) * (1.0 - surfDepth * 0.35);
-    col += palette(ct + 0.50) * 0.05;
-    col += uCoreEnergy * palette(ct + 0.15) * 0.16;
+    col += palette(ct + 0.35) * viewSoft * (0.09 + uHi * 0.055) * (1.0 - surfDepth * 0.42);
+    col += palette(ct + 0.50) * 0.04;
+    col += uCoreEnergy * palette(ct + 0.15) * 0.13;
     col *= (1.0 - surfDepth * 0.15);
     // Atmospheric fog: blend toward near-black at depth
     col  = mix(col, fogColor, smoothstep(0.3, 0.9, surfDepth));
@@ -494,26 +494,27 @@ void main() {
   } else {
     // ── Volumetric glow: near-miss rays accumulate fog ───────────────────────
     // Glow stronger in foreground (small depth01), fades at back
-    float glowStr = mix(0.48, 0.24, depth01);
-    float glow    = exp(-minD * 2.4) * glowStr;
+    float glowStr = mix(0.34, 0.14, depth01);
+    float glow    = exp(-minD * 3.1) * glowStr;
     vec2 bgFlow = vec2(
       sin(t * 0.04 + fieldUV.y * 0.65) * 0.18,
       cos(t * 0.035 + fieldUV.x * 0.55) * 0.14
     ) + vec2(uLowMid * 0.025, -uBassPulse * 0.018);
     float bgN = fbm(fieldUV * 0.42 + bgFlow + vec2(uPalettePhase * 0.05, -uPalettePhase * 0.03));
     float bgT = bgN * 0.36 + 0.72 + uColorShift * 0.3 + uAudioBrightness * 0.04;
-    vec3 bgFog = palette(bgT + 0.12 + fieldDetail * 0.06) * (0.020 + bgN * 0.026 + fieldDetail * 0.010 + uCoreEnergy * 0.018);
-    col  = palette(bgT) * glow * (0.26 + uCoreEnergy * 0.28);
+    vec3 bgFog = palette(bgT + 0.12 + fieldDetail * 0.06) * (0.018 + bgN * 0.022 + fieldDetail * 0.008 + uCoreEnergy * 0.012);
+    col  = palette(bgT) * glow * (0.18 + uCoreEnergy * 0.18);
     col += bgFog;
     col *= (1.0 - depthFog * 0.34);
-    col += palette(bgT + 0.30) * depthFog * 0.035 * (0.4 + uCoreEnergy * 0.2);
+    col += palette(bgT + 0.30) * depthFog * 0.024 * (0.4 + uCoreEnergy * 0.16);
     col  = mix(col, fogColor, smoothstep(0.5, 1.0, depth01));
   }
 
   // ── Subsurface proximity glow ─────────────────────────────────────────────
-  float proxGlow = exp(-minD * minD * 18.0);
+  float proxGlow = exp(-minD * minD * 24.0);
   float proxT    = fbm(fieldUV * 0.28 + vec2(t * 0.05, 0.0)) * 0.4 + fieldDetail * 0.08 + 0.72 + uColorShift * 0.3;
-  col += palette(proxT + 0.15) * proxGlow * (0.16 + uCoreEnergy * 0.30);
+  float proxMask = hitDist > 0.0 ? 0.82 : smoothstep(0.22, 0.78, proxGlow);
+  col += palette(proxT + 0.15) * proxGlow * proxMask * (0.10 + uCoreEnergy * 0.20);
 
   // Secondary procedural texture, gated by flux so transients reveal detail
   // without flashing the whole frame.
@@ -525,16 +526,16 @@ void main() {
   );
   float procN = 0.5 + 0.5 * noise(fieldUV * (0.85 + cent * 1.25) + procFlow * 0.42 + vec2(tBase * 0.05, -tBase * 0.04));
   float procMask = smoothstep(0.38, 0.82, procN);
-  float localMask = hitDist > 0.0 ? 0.70 : smoothstep(0.08, 0.55, proxGlow);
-  float procStrength = (0.025 + fluxLift * 0.16 + uTreblePulse * 0.025 + uAudioDetail * 0.020 + uAudioTurbulence * 0.030)
-                     * uProcIntensity * localMask * (0.45 + uSurfaceEnergy * 0.62);
+  float localMask = hitDist > 0.0 ? 0.62 : smoothstep(0.18, 0.72, proxGlow);
+  float procStrength = (0.020 + fluxLift * 0.12 + uTreblePulse * 0.018 + uAudioDetail * 0.016 + uAudioTurbulence * 0.022)
+                     * uProcIntensity * localMask * (0.42 + uSurfaceEnergy * 0.50);
   col += palette(procN * 0.22 + cent * 0.18 + uPalettePhase * 0.12 + 0.58) * procMask * procStrength;
 
   // ── Energy filaments: sparse curved streaks, visible only during energetic moments ──
   // Threshold FBM at a tight band → sparse arcs; mask by energy+force so they
   // only surface during peaks. No second pass needed — lives in the same shader.
-  float energyMask = clamp(forceEnergySum + uSurfaceEnergy * 0.8 + uParticleEnergy * 0.32 + uBassHi * 0.38 + uMidPulse * 0.18, 0.0, 1.0);
-  if (energyMask > 0.05) {
+  float energyMask = clamp(forceEnergySum * 0.80 + uSurfaceEnergy * 0.64 + uParticleEnergy * 0.26 + uBassHi * 0.30 + uMidPulse * 0.14, 0.0, 1.0);
+  if (energyMask > 0.08) {
     vec2  filUV  = fieldUV * 3.8 + vec2(t * 0.06 + modeBias * 0.08, t * -0.04);
     float filN   = fbm(filUV);
     float filLine = smoothstep(0.54, 0.58, filN) * smoothstep(0.62, 0.58, filN);
@@ -542,22 +543,22 @@ void main() {
     float filamentMix = clamp(0.30 + modeCollapse * 0.34 + modeOrbit * 0.18 + uAudioDetail * 0.22, 0.0, 0.82);
     filLine = mix(filLine, trapLine, filamentMix);
     float filT    = filN * 0.3 + uEnergy * 0.4 + uColorShift * 0.2 + uAudioBrightness * 0.08;
-    col += palette(filT) * filLine * energyMask * (0.36 + uAudioDetail * 0.24);
+    col += palette(filT) * filLine * energyMask * (0.27 + uAudioDetail * 0.18);
   }
 
   // ── Force-energy brightness: forces locally amplify field brightness ────────
-  col += palette(t * 0.4 + 0.5) * forceEnergySum * (0.26 + uBassPulse * 0.10);
-  col += palette(t * 0.4 + 0.5) * uColorSpike * 0.25;
+  col += palette(t * 0.4 + 0.5) * forceEnergySum * (0.19 + uBassPulse * 0.07);
+  col += palette(t * 0.4 + 0.5) * uColorSpike * 0.18;
 
   // ── Mouse energy ripple ────────────────────────────────────────────────────
   float mDist = length(fieldUV - uMouse);
-  col += palette(t * 0.4 + 0.5) * exp(-mDist * 2.5) * uMouseVel * 0.55;
+  col += palette(t * 0.4 + 0.5) * exp(-mDist * 3.2) * uMouseVel * 0.38;
 
   // ── Hi shimmer + intensity ─────────────────────────────────────────────────
-  float fineSpark = smoothstep(0.06, 0.75, uHighMid + uTreblePulse * 0.55) * (0.035 + uTreble * 0.025);
-  col += (uHi * 0.055 + fineSpark) * vec3(0.0, 0.75, 0.60);
+  float fineSpark = smoothstep(0.08, 0.78, uHighMid + uTreblePulse * 0.45) * (0.028 + uTreble * 0.018);
+  col += (uHi * 0.040 + fineSpark) * vec3(0.0, 0.68, 0.54);
   col *= 1.0 - modeCollapse * (0.08 + uAudioBody * 0.06) * (1.0 - smoothstep(0.40, 1.60, length(vUv * 2.0 - 1.0)));
-  float exposure = clamp(0.56 + uIntensity * 0.58 + uAudioBrightness * 0.22 + uRms * 0.14 - uSilence * 0.10, 0.48, 1.34);
+  float exposure = clamp(0.54 + uIntensity * 0.50 + uAudioBrightness * 0.16 + uRms * 0.10 - uSilence * 0.10, 0.46, 1.18);
   col *= exposure;
 
   // ── Vignette ───────────────────────────────────────────────────────────────
