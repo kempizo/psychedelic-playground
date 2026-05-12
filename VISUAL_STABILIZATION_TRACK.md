@@ -374,5 +374,7 @@ For each future implementation pass:
 
 | Date | Change |
 |---|---|
+| 2026-05-12 | ✅ Stabilization Pass S1.2 removed the calm-mode blob border by calm-gating outer edge glow, replacing rim contrast with soft surface fill, broadening proximity haze, and reducing trail silhouette stacking without changing render order, controls, uniforms, URLs, presets, or particles. |
+| 2026-05-12 | ✅ Stabilization Pass S1.1 softened blob border transition by feathering main-shader surface/near-miss masks and dampening trail edge shear without changing render order, controls, uniforms, URLs, presets, or particles. |
 | 2026-05-12 | ✅ Stabilization Pass S1 tuned blob edge/glow brightness masks in the main shader without changing render order, controls, URLs, presets, or particle architecture. |
 | 2026-05-12 | ✅ Stabilization Pass S0 planning document created as a separate visual stabilization track. |

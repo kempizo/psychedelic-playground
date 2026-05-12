@@ -459,6 +459,9 @@ void main() {
   // depth01: 0 = close foreground, 1 = far background / miss
   float depth01   = clamp(tRay / maxDist, 0.0, 1.0);
   float depthFog  = 1.0 - exp(-tRay * 0.032);
+  float edgeProximity = exp(-minD * minD * 12.0);
+  float edgeFeather = smoothstep(0.04, 0.78, edgeProximity);
+  float edgeEnergy = smoothstep(0.18, 0.58, uEnergy + uOnset * 0.45 + uTreblePulse * 0.25 + uAudioBrightness * 0.18);
   // Atmospheric fog color: cool near-black tinted by current palette
   vec3  fogColor  = palette(uPaletteShift * 0.5 + fieldDetail * 0.08) * (0.035 + fieldDetail * 0.012);
 
@@ -484,7 +487,9 @@ void main() {
     col  = palette(ct) * diff;
     col += palette(ct + 0.18) * surfaceDetail * (uSurfaceEnergy * 0.12 + uHighMid * 0.035);
     float viewSoft = pow(1.0 - abs(dot(nrm, -rd)), 2.6);
-    col += palette(ct + 0.35) * viewSoft * (0.09 + uHi * 0.055) * (1.0 - surfDepth * 0.42);
+    col += palette(ct + 0.35) * viewSoft * (0.035 + uHi * 0.030 + edgeEnergy * 0.045) * (1.0 - surfDepth * 0.42);
+    float surfaceEdgeFill = smoothstep(0.12, 0.80, viewSoft) * edgeFeather;
+    col += palette(ct + 0.12) * surfaceEdgeFill * (0.026 + uCoreEnergy * 0.022 + edgeEnergy * 0.018) * (1.0 - surfDepth * 0.35);
     col += palette(ct + 0.50) * 0.04;
     col += uCoreEnergy * palette(ct + 0.15) * 0.13;
     col *= (1.0 - surfDepth * 0.15);
@@ -494,8 +499,8 @@ void main() {
   } else {
     // ── Volumetric glow: near-miss rays accumulate fog ───────────────────────
     // Glow stronger in foreground (small depth01), fades at back
-    float glowStr = mix(0.34, 0.14, depth01);
-    float glow    = exp(-minD * 3.1) * glowStr;
+    float glowStr = mix(0.16, 0.08, depth01);
+    float glow    = exp(-minD * 1.7) * glowStr * (0.04 + edgeEnergy * 0.96);
     vec2 bgFlow = vec2(
       sin(t * 0.04 + fieldUV.y * 0.65) * 0.18,
       cos(t * 0.035 + fieldUV.x * 0.55) * 0.14
@@ -511,10 +516,10 @@ void main() {
   }
 
   // ── Subsurface proximity glow ─────────────────────────────────────────────
-  float proxGlow = exp(-minD * minD * 24.0);
+  float proxGlow = exp(-minD * minD * 10.0);
   float proxT    = fbm(fieldUV * 0.28 + vec2(t * 0.05, 0.0)) * 0.4 + fieldDetail * 0.08 + 0.72 + uColorShift * 0.3;
-  float proxMask = hitDist > 0.0 ? 0.82 : smoothstep(0.22, 0.78, proxGlow);
-  col += palette(proxT + 0.15) * proxGlow * proxMask * (0.10 + uCoreEnergy * 0.20);
+  float proxMask = hitDist > 0.0 ? 0.56 : smoothstep(0.08, 0.88, proxGlow) * edgeEnergy;
+  col += palette(proxT + 0.15) * proxGlow * proxMask * (0.038 + uCoreEnergy * 0.085 + edgeEnergy * 0.050);
 
   // Secondary procedural texture, gated by flux so transients reveal detail
   // without flashing the whole frame.
