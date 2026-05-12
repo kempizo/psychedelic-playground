@@ -329,6 +329,14 @@ export function useThreeScene(canvasRef) {
       }
     }
 
+    const countLivingParticles = () => {
+      let count = 0
+      for (let i = 0; i < MAX_PARTICLES; i++) {
+        if (ages[i] < lives[i]) count++
+      }
+      return count
+    }
+
     const onPointerDown = (e) => {
       if (!e.isPrimary) return
       if (e.target !== canvasRef.current) return
@@ -907,10 +915,17 @@ export function useThreeScene(canvasRef) {
       const hiVal = Math.min(1, visualState.particleEnergy * smoothed.intensity)
       const density = Math.max(0, smoothed.particleDensity)
       const livingGate = (1 - silence * 0.42) * idleMotionGate
-      const spawnRate = hiVal * (1.5 + beatConfidence * 1.8 + visualState.audioDetail * 0.9) * density * livingGate
-      if (density > 0.01 && hiVal > lastHi * 0.94 && hiVal > 0.12 && livingGate > 0.22) {
+      const livingParticles = countLivingParticles()
+      const crowding = livingParticles / MAX_PARTICLES
+      const capacityGate = 1 - smoothstep05(crowding, 0.58, 0.92)
+      const transitionSpawnGate = 0.62 + modeTransition * 0.38
+      const calmSpawnGate = bOut.state === 'calm' ? 0.62 : 1
+      const spawnRate = hiVal * (1.15 + beatConfidence * 1.35 + visualState.audioDetail * 0.70) * density * livingGate * capacityGate * transitionSpawnGate * calmSpawnGate
+      const particleThreshold = 0.13 + silenceHold * 0.06 + crowding * 0.08
+      if (density > 0.01 && hiVal > lastHi * 0.95 && hiVal > particleThreshold && livingGate > 0.22 && capacityGate > 0.04) {
         const wholeSpawns = Math.floor(spawnRate)
-        const spawns = wholeSpawns + (Math.random() < spawnRate - wholeSpawns ? 1 : 0)
+        const maxFrameSpawns = bOut.state === 'peak' && density > 1.15 && crowding < 0.55 ? 2 : 1
+        const spawns = Math.min(maxFrameSpawns, wholeSpawns + (Math.random() < spawnRate - wholeSpawns ? 1 : 0))
         for (let s = 0; s < spawns; s++) {
           const depth = 0.4 + Math.random() * 0.6
           const spawnMode = Math.random() < modeTransition ? mode : particleBlendFromMode
@@ -919,34 +934,35 @@ export function useThreeScene(canvasRef) {
       }
       lastHi = hiVal
 
-      // Ambient idle dust (1 particle/sec max) — keeps life visible at silence
-      if (density > 0.05 && bOut.state === 'calm' && Math.random() < dt * Math.min(0.9, 0.15 + density * 0.55) * (0.55 + livingGate * 0.45) * idleMotionGate) {
-        const idleDustVelocity = 0.0007 + livingGate * 0.0010
+      // Ambient idle dust stays sparse so silence breathes without filling the blob.
+      if (density > 0.05 && bOut.state === 'calm' && crowding < 0.42 && Math.random() < dt * Math.min(0.42, 0.10 + density * 0.28) * (0.45 + livingGate * 0.35) * idleMotionGate) {
+        const idleDustVelocity = 0.00045 + livingGate * 0.00075
         spawnParticle(
           Math.random() * 2 - 1, Math.random() * 2 - 1,
           (Math.random() - 0.5) * idleDustVelocity, (Math.random() - 0.5) * idleDustVelocity,
-          3.0 + Math.random() * 2.0, 0, 0.3 + Math.random() * 0.3)
+          2.6 + Math.random() * 1.7, 0, 0.26 + Math.random() * 0.26)
       }
 
       // Blob-collision burst: spark particles ejected radially from blob surface
       if (blobBurstPending > 0) {
-        const count = blobBurstPending
+        const burstCapacity = Math.max(0, Math.floor(MAX_PARTICLES * 0.72) - countLivingParticles())
+        const count = Math.min(blobBurstPending, Math.max(0, Math.min(8, burstCapacity)))
         blobBurstPending = 0
         for (let s = 0; s < count; s++) {
           const angle = Math.random() * Math.PI * 2
           const r     = 0.30 + Math.random() * 0.10
-          const spd   = 0.005 + Math.random() * 0.005
+          const spd   = 0.0038 + Math.random() * 0.0042
           spawnParticle(
             Math.cos(angle) * r, Math.sin(angle) * r,
             Math.cos(angle) * spd, Math.sin(angle) * spd,
-            1.0 + Math.random() * 1.0, 1, 0.5 + Math.random() * 0.5)
+            0.9 + Math.random() * 0.9, 1, 0.44 + Math.random() * 0.46)
         }
       }
 
       // Update live particles: drag + force field coupling
       for (let i = 0; i < MAX_PARTICLES; i++) {
         if (ages[i] < lives[i]) {
-          ages[i] += 1 / 60
+          ages[i] += dt
           const ageNorm = Math.min(1, ages[i] / Math.max(lives[i], 0.001))
           const type = ptypes[i]
           const modeRadial = visualState.modeBlend.x
@@ -1000,6 +1016,7 @@ export function useThreeScene(canvasRef) {
       }
       pGeo.attributes.position.needsUpdate = true
       pGeo.attributes.aAge.needsUpdate     = true
+      pGeo.attributes.aLife.needsUpdate    = true
       pGeo.attributes.aType.needsUpdate    = true
       pGeo.attributes.aDepth.needsUpdate   = true
 

@@ -36,11 +36,13 @@ void main() {
   float life = aLife;
   float age  = aAge;
   float norm = clamp(age / max(life, 0.001), 0.0, 1.0);
-  float fade = (1.0 - smoothstep(0.0, 1.0, norm));
+  float fadeIn = smoothstep(0.0, 0.08, norm);
+  float fadeOut = 1.0 - smoothstep(0.54, 1.0, norm);
+  float fade = fadeIn * fadeOut;
   float beatSoft = 0.75 + 0.25 * sin(uBeatPhase * 6.28318 + aDepth * 2.0);
-  float densityAlpha = mix(0.72, 1.25, clamp(uParticleDensity, 0.0, 2.0) * 0.5);
-  float silenceCalm = 1.0 - clamp(uSilence, 0.0, 1.0) * 0.28;
-  float audioLift = 0.34 + uParticleEnergy * 0.30 + uOnset * 0.08 + uAudioDetail * 0.10 + uAudioBody * 0.06;
+  float densityAlpha = mix(0.66, 1.08, clamp(uParticleDensity, 0.0, 2.0) * 0.5);
+  float silenceCalm = 1.0 - clamp(uSilence, 0.0, 1.0) * 0.36;
+  float audioLift = 0.28 + uParticleEnergy * 0.26 + uOnset * 0.06 + uAudioDetail * 0.08 + uAudioBody * 0.05;
   vAlpha = fade * aDepth * audioLift * beatSoft * densityAlpha * silenceCalm;
 
   // Palette offset per type; energy pushes sparks toward magenta/cyan
@@ -52,9 +54,9 @@ void main() {
 
   vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
   // Depth and type affect size: sparks are small and fast, dust is larger
-  float baseSize = aType < 0.5 ? 3.6 : aType < 1.5 ? 2.2 : 3.0;
-  float densitySize = mix(0.82, 1.18, clamp(uParticleDensity, 0.0, 2.0) * 0.5);
-  float shimmerSize = uParticleEnergy * 0.80 + uTreblePulse * 1.10 + uAudioTurbulence * 0.65 + uAudioBody * 0.35;
-  gl_PointSize = (baseSize + vAlpha * 1.35 + shimmerSize) * aDepth * uPixelRatio * densitySize * (0.88 + silenceCalm * 0.12);
+  float baseSize = aType < 0.5 ? 3.2 : aType < 1.5 ? 2.0 : 2.7;
+  float densitySize = mix(0.78, 1.06, clamp(uParticleDensity, 0.0, 2.0) * 0.5);
+  float shimmerSize = uParticleEnergy * 0.62 + uTreblePulse * 0.82 + uAudioTurbulence * 0.48 + uAudioBody * 0.28;
+  gl_PointSize = (baseSize + vAlpha * 1.10 + shimmerSize) * aDepth * uPixelRatio * densitySize * (0.86 + silenceCalm * 0.14);
   gl_Position = projectionMatrix * mvPos;
 }
