@@ -374,7 +374,17 @@ export function useThreeScene(canvasRef) {
       procIntensity: pi0,
       particleDensity: pd0,
     } = useStore.getState()
-    const smoothed = { speed: s0, intensity: i0, colorShift: c0, chaos: ch0, breakSpike: 0 }
+    const smoothed = {
+      speed: s0,
+      intensity: i0,
+      colorShift: c0,
+      chaos: ch0,
+      trailDecay: td0,
+      cameraDistance: cd0,
+      procIntensity: pi0,
+      particleDensity: pd0,
+      breakSpike: 0,
+    }
 
     let prevSpeed = s0, prevIntensity = i0, prevColorShift = c0, prevChaos = ch0
     let prevTrailDecay = td0, prevCameraDistance = cd0, prevProcIntensity = pi0, prevParticleDensity = pd0
@@ -532,14 +542,14 @@ export function useThreeScene(canvasRef) {
         const nextFamily = mode >= 2
         particleBlendFromMode = prevMode
         modeTransitionTarget = 0
-        modeTransitionHoldUntil = elapsed + 0.12
+        modeTransitionHoldUntil = elapsed + 0.10
         pendingTrailClearFrames = prevFamily !== nextFamily ? 2 : 1
         prevMode = mode
       }
       if (modeTransitionTarget === 0 && elapsed >= modeTransitionHoldUntil) {
         modeTransitionTarget = 1
       }
-      const modeTransitionTau = modeTransitionTarget === 0 ? 0.05 : 0.75
+      const modeTransitionTau = modeTransitionTarget === 0 ? 0.07 : 0.88
       modeTransition += (modeTransitionTarget - modeTransition) * (1 - Math.exp(-dt / modeTransitionTau))
 
       // Detect slider changes to reset auto-blend idle timer
@@ -566,6 +576,13 @@ export function useThreeScene(canvasRef) {
       smoothed.intensity  += (bOut.intensity  - smoothed.intensity)  * lerpCtrl
       smoothed.colorShift += (bOut.colorShift - smoothed.colorShift) * lerpCtrl
       smoothed.chaos      += (bOut.chaos      - smoothed.chaos)      * lerpCtrl
+      const smoothVisualControl = (key, target, tau) => {
+        smoothed[key] += (target - smoothed[key]) * (1 - Math.exp(-dt / tau))
+      }
+      smoothVisualControl('trailDecay', trailDecay, 0.30)
+      smoothVisualControl('cameraDistance', cameraDistance, 0.34)
+      smoothVisualControl('procIntensity', procIntensity, 0.28)
+      smoothVisualControl('particleDensity', particleDensity, 0.38)
 
       // Bass auto-breath: broad centered pressure, separate from click/drag ripples.
       const curBass = audioData.bass
@@ -693,7 +710,7 @@ export function useThreeScene(canvasRef) {
       visualState.surfaceEnergy += (surfaceTarget - visualState.surfaceEnergy) * (1 - Math.exp(-dt / (surfaceTarget > visualState.surfaceEnergy ? 0.16 : 0.45)))
       visualState.particleEnergy += (particleTarget - visualState.particleEnergy) * (1 - Math.exp(-dt / 0.32))
       visualState.beatPhase += (beatPhase - visualState.beatPhase) * (1 - Math.exp(-dt / 0.16))
-      visualState.palettePhase += dt * (0.018 + smoothed.speed * 0.018) + predictedEnergy * dt * 0.035 + colorShift * dt * 0.010
+      visualState.palettePhase += dt * (0.018 + smoothed.speed * 0.018) + predictedEnergy * dt * 0.035 + smoothed.colorShift * dt * 0.010
 
       const modeTargets = [
         { cameraDistance: 2.8, radial: 0.05, vortex: 0.00, collapse: 0.00, orbit: 0.00 },
@@ -703,8 +720,8 @@ export function useThreeScene(canvasRef) {
         { cameraDistance: 3.0, radial: 0.10, vortex: 0.00, collapse: 0.00, orbit: 1.00 },
       ]
       const modeTarget = modeTargets[mode] ?? modeTargets[0]
-      const modeLerp = 1 - Math.exp(-dt / 0.72)
-      const targetCameraDistance = Math.max(0.7, Math.min(4.0, modeTarget.cameraDistance + cameraDistance))
+      const modeLerp = 1 - Math.exp(-dt / 0.82)
+      const targetCameraDistance = Math.max(0.7, Math.min(4.0, modeTarget.cameraDistance + smoothed.cameraDistance))
       visualState.cameraDistance += (targetCameraDistance - visualState.cameraDistance) * modeLerp
       visualState.modeBlend.x += (modeTarget.radial - visualState.modeBlend.x) * modeLerp
       visualState.modeBlend.y += (modeTarget.vortex - visualState.modeBlend.y) * modeLerp
@@ -777,7 +794,7 @@ export function useThreeScene(canvasRef) {
       mainUniforms.uCameraDistance.value = visualState.cameraDistance
       mainUniforms.uSpectralCentroid.value = audioData.spectralCentroid ?? 0
       mainUniforms.uSpectralFlux.value = audioData.spectralFlux ?? 0
-      mainUniforms.uProcIntensity.value = procIntensity
+      mainUniforms.uProcIntensity.value = smoothed.procIntensity
       mainUniforms.uAudioBody.value = visualState.audioBody
       mainUniforms.uAudioMorph.value = visualState.audioMorph
       mainUniforms.uAudioDetail.value = visualState.audioDetail
@@ -787,7 +804,7 @@ export function useThreeScene(canvasRef) {
 
       // Palette family: modes 0-1 = teal/green/violet, modes 2-4 = pink/purple/violet
       const paletteFamily = mode >= 2 ? 1 : 0
-      smoothPaletteFamily += (paletteFamily - smoothPaletteFamily) * (1 - Math.exp(-dt / 0.55))
+      smoothPaletteFamily += (paletteFamily - smoothPaletteFamily) * (1 - Math.exp(-dt / 0.68))
       mainUniforms.uPaletteFamily.value = paletteFamily
       mainUniforms.uPaletteFamilyBlend.value = smoothPaletteFamily
       // uPaletteShift: break events push toward pink; slow LFO paletteDrift wanders hue
@@ -802,7 +819,7 @@ export function useThreeScene(canvasRef) {
       pMat.uniforms.uEnergy.value        = controller.energy
       pMat.uniforms.uParticleEnergy.value = visualState.particleEnergy
       pMat.uniforms.uBeatPhase.value      = visualState.beatPhase
-      pMat.uniforms.uParticleDensity.value = particleDensity
+      pMat.uniforms.uParticleDensity.value = smoothed.particleDensity
       pMat.uniforms.uTreblePulse.value = treblePulse
       pMat.uniforms.uOnset.value = onset
       pMat.uniforms.uAudioBody.value = visualState.audioBody
@@ -829,13 +846,13 @@ export function useThreeScene(canvasRef) {
       // State-driven trail decay: per-mode defaults blended with behavioral target
       const modeDecayDefaults = [0.84, 0.84, 0.86, 0.90, 0.82]
       const modeDecay = modeDecayDefaults[mode] ?? 0.84
-      const userDecayOffset = trailDecay - 0.84
+      const userDecayOffset = smoothed.trailDecay - 0.84
       const baseDecay = Math.max(0.70, Math.min(0.94, (bOut.trailDecay ?? modeDecay) + userDecayOffset))
       const minDecay = Math.max(0.68, baseDecay - 0.06)
-      const transitionClear = (1 - modeTransition) * 0.16
+      const transitionClear = (1 - modeTransition) * 0.14
       const bassClear = mainUniforms.uBass.value * 0.035
       const targetDecay = Math.max(0.68, Math.min(0.94, Math.max(minDecay, baseDecay - bassClear - transitionClear)))
-      const trailTau = transitionClear > 0.01 ? 0.08 : 0.24
+      const trailTau = transitionClear > 0.01 ? 0.11 : 0.24
       smoothTrailDecay += (targetDecay - smoothTrailDecay) * (1 - Math.exp(-dt / trailTau))
       trailUniforms.uDecay.value = smoothTrailDecay
       trailUniforms.uEnergy.value = visualState.particleEnergy
@@ -882,7 +899,7 @@ export function useThreeScene(canvasRef) {
 
       // Particle atmosphere follows delayed predicted energy instead of raw treble spikes.
       const hiVal = Math.min(1, visualState.particleEnergy * smoothed.intensity)
-      const density = Math.max(0, particleDensity)
+      const density = Math.max(0, smoothed.particleDensity)
       const livingGate = 1 - silence * 0.42
       const spawnRate = hiVal * (1.5 + beatConfidence * 1.8 + visualState.audioDetail * 0.9) * density * livingGate
       if (density > 0.01 && hiVal > lastHi * 0.94 && hiVal > 0.12 && livingGate > 0.22) {
