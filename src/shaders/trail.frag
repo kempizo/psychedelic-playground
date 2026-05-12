@@ -8,6 +8,9 @@ uniform float uBeatPhase;
 uniform float uFlow;
 uniform float uOnset;
 uniform float uTreble;
+uniform float uAudioDetail;
+uniform float uAudioTurbulence;
+uniform float uTreblePulse;
 
 varying vec2 vUv;
 
@@ -27,7 +30,13 @@ void main() {
   float brightFade = mix(1.0, mix(0.91, 0.96, clamp(uTreble, 0.0, 1.0)), smoothstep(0.45, 0.95, prevLuma));
   prev.rgb *= brightFade;
 
+  float edge = smoothstep(0.035, 0.30, length(current.rgb - prev.rgb));
+  float chromaEnergy = clamp(uAudioDetail * 0.32 + uAudioTurbulence * 0.44 + uTreblePulse * 0.30, 0.0, 1.0);
+  float shearPhase = sin((center.x - center.y) * 13.0 + uBeatPhase * 6.28318 + swirl * 0.35);
+  vec3 shear = vec3(prev.g - prev.b, prev.b - prev.r, prev.r - prev.g);
+  prev.rgb += shear * edge * chromaEnergy * shearPhase * 0.045;
+
   vec4 mixed = mix(current, prev, uDecay);
   mixed.rgb += current.rgb * uOnset * 0.035 * (1.0 - smoothstep(0.0, 0.8, r2));
-  gl_FragColor = mixed;
+  gl_FragColor = vec4(clamp(mixed.rgb, 0.0, 1.0), 1.0);
 }

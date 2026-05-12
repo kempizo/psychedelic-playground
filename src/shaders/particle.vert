@@ -13,6 +13,10 @@ uniform float uBeatPhase;
 uniform float uParticleDensity;
 uniform float uTreblePulse;
 uniform float uOnset;
+uniform float uAudioBody;
+uniform float uAudioDetail;
+uniform float uAudioTurbulence;
+uniform float uSilence;
 
 varying float vAlpha;
 varying vec3  vColor;
@@ -35,7 +39,9 @@ void main() {
   float fade = (1.0 - smoothstep(0.0, 1.0, norm));
   float beatSoft = 0.75 + 0.25 * sin(uBeatPhase * 6.28318 + aDepth * 2.0);
   float densityAlpha = mix(0.72, 1.25, clamp(uParticleDensity, 0.0, 2.0) * 0.5);
-  vAlpha = fade * aDepth * (0.36 + uParticleEnergy * 0.34 + uOnset * 0.10) * beatSoft * densityAlpha;
+  float silenceCalm = 1.0 - clamp(uSilence, 0.0, 1.0) * 0.28;
+  float audioLift = 0.34 + uParticleEnergy * 0.30 + uOnset * 0.08 + uAudioDetail * 0.10 + uAudioBody * 0.06;
+  vAlpha = fade * aDepth * audioLift * beatSoft * densityAlpha * silenceCalm;
 
   // Palette offset per type; energy pushes sparks toward magenta/cyan
   float typeOffset = aType < 0.5 ? 0.10
@@ -48,6 +54,7 @@ void main() {
   // Depth and type affect size: sparks are small and fast, dust is larger
   float baseSize = aType < 0.5 ? 3.6 : aType < 1.5 ? 2.2 : 3.0;
   float densitySize = mix(0.82, 1.18, clamp(uParticleDensity, 0.0, 2.0) * 0.5);
-  gl_PointSize = (baseSize + vAlpha * 1.4 + uParticleEnergy * 1.0 + uTreblePulse * 1.35) * aDepth * uPixelRatio * densitySize;
+  float shimmerSize = uParticleEnergy * 0.80 + uTreblePulse * 1.10 + uAudioTurbulence * 0.65 + uAudioBody * 0.35;
+  gl_PointSize = (baseSize + vAlpha * 1.35 + shimmerSize) * aDepth * uPixelRatio * densitySize * (0.88 + silenceCalm * 0.12);
   gl_Position = projectionMatrix * mvPos;
 }

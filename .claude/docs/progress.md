@@ -1,6 +1,6 @@
 # Psychedelic Playground - Project Progress
 
-## Status: Current MVP implemented; docs consolidated around active rules
+## Status: Current MVP implemented; visual expansion shader/trail/particle passes verified
 
 ## Done
 
@@ -21,6 +21,8 @@
 - [x] Five render modes: Fluid, Radial, Vortex, Collapse, and Orbit.
 - [x] Procedural texture layer modulated by spectral flux and `procIntensity`.
 - [x] CPU particle system with fixed buffers, additive blending, mode-aware spawning, density control, and audio reactivity.
+- [x] Psychedelic shader expansion with derived audio uniforms, polar folding, spiral torsion, orbit-trap filaments, controlled palette exposure, and trail chromatic shear.
+- [x] CPU particle cohesion pass with mode-specific spore/spark/droplet spawning, field-coupled drift, and silence-gated motion.
 
 ### Audio
 
@@ -54,10 +56,13 @@
 - [x] `CLAUDE.md` is a thin Claude-specific wrapper.
 - [x] `PLAN.md` is the execution ledger and guardrail map.
 - [x] `.claude/rules/` contains path-scoped technical contracts.
+- [x] `.claude/plans/psychedelic-playground-visual-expansion-master.md` is the canonical visual expansion prompt.
 - [x] Stale root planning artifacts archived under `.claude/archive/`.
 
 ## Current Follow-Ups
 
+- [ ] Optional conservative trail edge-growth experiment inside the existing trail shader, only if visual QA shows the current chromatic shear needs more biological residue.
+- [ ] Optional Phase 6 audio `DataTexture` prototype from `.claude/plans/psychedelic-playground-visual-expansion-master.md`, only after shader/trail/particle QA and performance checks.
 - [ ] Cross-browser test Safari and Chromium for mic/file audio permissions.
 - [ ] Mobile check for touch interaction, control layout, and WebGL performance.
 - [ ] Error states for mic permission denied and unsupported audio file formats.

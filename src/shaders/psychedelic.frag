@@ -44,10 +44,18 @@ uniform float uCameraDistance;
 uniform float uSpectralCentroid;
 uniform float uSpectralFlux;
 uniform float uProcIntensity;
+uniform float uAudioBody;
+uniform float uAudioMorph;
+uniform float uAudioDetail;
+uniform float uAudioPulse;
+uniform float uAudioBrightness;
+uniform float uAudioTurbulence;
 // Slow-decaying sub-bass accumulator — adds lazy drift weight to camera position
 uniform vec2  uCamDrift;
 
 varying vec2 vUv;
+
+const float TAU = 6.28318530718;
 
 // ── 2D noise (quintic Perlin) ──────────────────────────────────────────────────
 vec2 hash2(vec2 p) {
@@ -101,12 +109,44 @@ vec2 fbm2(vec2 p) {
   return v;
 }
 
-vec2 kaleido(vec2 p, float sectors) {
-  float r = length(p);
-  float a = atan(p.y, p.x);
-  float seg = 6.28318 / max(2.0, sectors);
-  a = abs(mod(a + seg * 0.5, seg) - seg * 0.5);
-  return vec2(cos(a), sin(a)) * r;
+vec2 toPolar(vec2 p) {
+  return vec2(length(p), atan(p.y, p.x));
+}
+
+vec2 fromPolar(vec2 polar) {
+  return vec2(cos(polar.y), sin(polar.y)) * polar.x;
+}
+
+vec2 kaleidoFold(vec2 p, float sectors, float phase, float amount) {
+  vec2 polar = toPolar(p);
+  float seg = TAU / max(2.0, sectors);
+  float folded = abs(mod(polar.y + phase + seg * 0.5, seg) - seg * 0.5);
+  polar.y = mix(polar.y, folded - phase, clamp(amount, 0.0, 1.0));
+  return fromPolar(polar);
+}
+
+vec2 spiralWarp(vec2 p, float amount, float phase) {
+  vec2 polar = toPolar(p);
+  float centerFalloff = 1.0 - smoothstep(0.05, 2.05, polar.x);
+  float rimFalloff = smoothstep(0.15, 1.45, polar.x) * (1.0 - smoothstep(1.1, 2.4, polar.x));
+  polar.y += amount * centerFalloff + sin(polar.x * 4.0 + phase) * amount * 0.42 * rimFalloff;
+  polar.x *= 1.0 + sin(polar.y * 3.0 - phase) * amount * 0.018;
+  return fromPolar(polar);
+}
+
+float orbitTrapMask(vec2 p, float phase) {
+  vec2 z = p;
+  float trap = 1.0;
+  for (int i = 0; i < 4; i++) {
+    float fi = float(i);
+    z = abs(z);
+    z = z / max(dot(z, z), 0.30) - vec2(0.76 + 0.04 * sin(phase + fi), 0.48 + 0.03 * cos(phase * 0.7 + fi));
+    float c = cos(phase + fi * 1.27);
+    float s = sin(phase + fi * 1.27);
+    z = mat2(c, s, -s, c) * z;
+    trap = min(trap, abs(z.x * z.y));
+  }
+  return 1.0 - smoothstep(0.010, 0.070, trap);
 }
 
 vec2 warpField(vec2 p, float tBase, float tDetail) {
@@ -142,13 +182,23 @@ float fbm3(vec3 p) {
 // uPaletteShift adds a transient break-event shift on top.
 // Brightness is localized (dark base + mid-amplitude swing); no full-frame colour flashes.
 vec3 palette(float t) {
-  float phaseOffset = uPaletteFamilyBlend * 0.33 + uPaletteShift * 0.20 + uPalettePhase * 0.16;
+  float cent = clamp(uSpectralCentroid, 0.0, 1.0);
+  float phaseOffset = uPaletteFamilyBlend * 0.33 + uPaletteShift * 0.20
+                    + uPalettePhase * 0.16 + uColorShift * 0.12 + uAudioMorph * 0.035;
   t += phaseOffset;
   vec3 a = vec3(0.50, 0.45, 0.55);
   vec3 b = vec3(0.50, 0.50, 0.50);
   vec3 c = vec3(1.00, 1.00, 0.50);
   vec3 d = vec3(0.00, 0.33, 0.67);
-  return a + b * cos(6.28318 * (c * t + d));
+  vec3 col = a + b * cos(TAU * (c * t + d));
+
+  float temperature = clamp(cent * 0.72 + uAudioBrightness * 0.28, 0.0, 1.0);
+  vec3 coolTint = vec3(0.84, 1.02, 1.10);
+  vec3 brightTint = vec3(1.04, 1.00, 0.76);
+  vec3 familyTint = mix(vec3(0.92, 1.06, 0.98), vec3(1.08, 0.88, 1.10), uPaletteFamilyBlend);
+  col *= mix(coolTint, brightTint, temperature * 0.68) * familyTint;
+  col = mix(col, col * col * (3.0 - 2.0 * col), 0.08 + uAudioDetail * 0.06);
+  return clamp(col, 0.0, 1.0);
 }
 
 // ── SDF: organic blob ──────────────────────────────────────────────────────────
@@ -254,15 +304,39 @@ void main() {
   ) * uDistortionSpike;
 
   // Shared organic coordinates: evaluated once, then reused by camera/layers.
+  float audioPresence = 1.0 - smoothstep(0.52, 1.0, uSilence);
+  float modeRadial = clamp(uModeBlend.x, 0.0, 1.0);
+  float modeVortex = clamp(uModeBlend.y, 0.0, 1.0);
+  float modeCollapse = clamp(uModeBlend.z, 0.0, 1.0);
+  float modeOrbit = clamp(uModeBlend.w, 0.0, 1.0);
+  float modeFluid = clamp(1.0 - max(max(modeRadial, modeVortex), max(modeCollapse, modeOrbit)), 0.0, 1.0);
+
   vec2 fieldUV = warpField(sUV, tBase, tDetail);
-  vec2 fieldNdc = fieldUV / vec2(aspect, 1.0);
   float fieldDetail = 0.5 + 0.5 * fbm(fieldUV * 0.46 + vec2(tBase * 0.030, -tBase * 0.024));
   float modeBias = (fieldDetail - 0.5) * (0.32 + uModeBlend.x * 0.20 + uModeBlend.y * 0.16 + uModeBlend.w * 0.14);
-  float kaleidoMix = (0.018 + uModeBlend.x * 0.034 + uModeBlend.y * 0.020 + uModeBlend.w * 0.014)
-                   * (0.65 + (1.0 - uSilence) * 0.35);
-  vec2 foldedUV = kaleido(fieldUV, 5.0 + uModeBlend.x * 2.0 + uModeBlend.w);
+
+  float spiralAmount = (0.026 + uAudioMorph * 0.060 + uAudioPulse * 0.030 + uAudioTurbulence * 0.030)
+                     * (0.32 + modeFluid * 0.28 + modeRadial * 0.30 + modeVortex * 1.35 + modeCollapse * 0.42 + modeOrbit * 0.46)
+                     * mix(0.48, 1.0, audioPresence);
+  fieldUV = spiralWarp(fieldUV, spiralAmount, tBase * (0.40 + modeVortex * 0.32) + uAudioTurbulence * 1.35 + modeBias * 0.45);
+
+  float foldSectors = 4.5 + modeRadial * 3.0 + modeOrbit * 1.5 + modeCollapse * 0.7;
+  float foldPhase = tBase * (0.16 + modeVortex * 0.22 + modeOrbit * 0.28)
+                  + uAudioPulse * 0.42 + modeOrbit * 2.094;
+  float kaleidoMix = (0.014 + modeFluid * 0.008 + modeRadial * 0.105 + modeVortex * 0.050 + modeCollapse * 0.030 + modeOrbit * 0.082)
+                   * (0.58 + audioPresence * 0.42 + uAudioMorph * 0.18);
+  vec2 foldedUV = kaleidoFold(fieldUV, foldSectors, foldPhase, 1.0);
   fieldUV = mix(fieldUV, foldedUV, kaleidoMix);
-  fieldNdc = fieldUV / vec2(aspect, 1.0);
+
+  float collapsePull = modeCollapse * (0.024 + uAudioBody * 0.050 + uAudioPulse * 0.026)
+                     * (1.0 - smoothstep(0.18, 1.80, length(fieldUV)));
+  fieldUV *= 1.0 - collapsePull;
+
+  vec2 orbitOffset = vec2(cos(foldPhase), sin(foldPhase)) * (0.018 + uAudioMorph * 0.018) * modeOrbit;
+  vec2 orbitFold = kaleidoFold(fieldUV + orbitOffset, 3.0, foldPhase * 0.55, 0.92) - orbitOffset;
+  fieldUV = mix(fieldUV, orbitFold, modeOrbit * (0.030 + uAudioMorph * 0.040));
+
+  vec2 fieldNdc = fieldUV / vec2(aspect, 1.0);
   sUV = fieldUV;
 
   // ── Mandala / radial influence layer ──────────────────────────────────────
@@ -405,7 +479,7 @@ void main() {
     float ct      = noiseV * 0.25 + uEnergy * 0.30 + (1.0 - surfDepth) * 0.25
                   + uPaletteShift * 0.20 + uColorShift * 0.25 + uMidHi * 0.08
                   + surfaceDetail * (uSurfaceEnergy * 0.10 + uMidPulse * 0.03)
-                  + uSpectralCentroid * 0.04;
+                  + uSpectralCentroid * 0.04 + uAudioBrightness * 0.07 + uAudioMorph * 0.04;
 
     col  = palette(ct) * diff;
     col += palette(ct + 0.18) * surfaceDetail * (uSurfaceEnergy * 0.12 + uHighMid * 0.035);
@@ -427,7 +501,7 @@ void main() {
       cos(t * 0.035 + fieldUV.x * 0.55) * 0.14
     ) + vec2(uLowMid * 0.025, -uBassPulse * 0.018);
     float bgN = fbm(fieldUV * 0.42 + bgFlow + vec2(uPalettePhase * 0.05, -uPalettePhase * 0.03));
-    float bgT = bgN * 0.36 + 0.72 + uColorShift * 0.3;
+    float bgT = bgN * 0.36 + 0.72 + uColorShift * 0.3 + uAudioBrightness * 0.04;
     vec3 bgFog = palette(bgT + 0.12 + fieldDetail * 0.06) * (0.020 + bgN * 0.026 + fieldDetail * 0.010 + uCoreEnergy * 0.018);
     col  = palette(bgT) * glow * (0.26 + uCoreEnergy * 0.28);
     col += bgFog;
@@ -452,7 +526,8 @@ void main() {
   float procN = 0.5 + 0.5 * noise(fieldUV * (0.85 + cent * 1.25) + procFlow * 0.42 + vec2(tBase * 0.05, -tBase * 0.04));
   float procMask = smoothstep(0.38, 0.82, procN);
   float localMask = hitDist > 0.0 ? 0.70 : smoothstep(0.08, 0.55, proxGlow);
-  float procStrength = (0.025 + fluxLift * 0.16 + uTreblePulse * 0.025) * uProcIntensity * localMask * (0.45 + uSurfaceEnergy * 0.62);
+  float procStrength = (0.025 + fluxLift * 0.16 + uTreblePulse * 0.025 + uAudioDetail * 0.020 + uAudioTurbulence * 0.030)
+                     * uProcIntensity * localMask * (0.45 + uSurfaceEnergy * 0.62);
   col += palette(procN * 0.22 + cent * 0.18 + uPalettePhase * 0.12 + 0.58) * procMask * procStrength;
 
   // ── Energy filaments: sparse curved streaks, visible only during energetic moments ──
@@ -463,8 +538,11 @@ void main() {
     vec2  filUV  = fieldUV * 3.8 + vec2(t * 0.06 + modeBias * 0.08, t * -0.04);
     float filN   = fbm(filUV);
     float filLine = smoothstep(0.54, 0.58, filN) * smoothstep(0.62, 0.58, filN);
-    float filT    = filN * 0.3 + uEnergy * 0.4 + uColorShift * 0.2;
-    col += palette(filT) * filLine * energyMask * 0.55;
+    float trapLine = orbitTrapMask(filUV * (0.22 + modeCollapse * 0.05 + modeOrbit * 0.04), tBase * 0.32 + uAudioMorph * 0.9 + modeBias);
+    float filamentMix = clamp(0.30 + modeCollapse * 0.34 + modeOrbit * 0.18 + uAudioDetail * 0.22, 0.0, 0.82);
+    filLine = mix(filLine, trapLine, filamentMix);
+    float filT    = filN * 0.3 + uEnergy * 0.4 + uColorShift * 0.2 + uAudioBrightness * 0.08;
+    col += palette(filT) * filLine * energyMask * (0.36 + uAudioDetail * 0.24);
   }
 
   // ── Force-energy brightness: forces locally amplify field brightness ────────
@@ -478,7 +556,9 @@ void main() {
   // ── Hi shimmer + intensity ─────────────────────────────────────────────────
   float fineSpark = smoothstep(0.06, 0.75, uHighMid + uTreblePulse * 0.55) * (0.035 + uTreble * 0.025);
   col += (uHi * 0.055 + fineSpark) * vec3(0.0, 0.75, 0.60);
-  col *= 0.55 + uIntensity * 0.65;
+  col *= 1.0 - modeCollapse * (0.08 + uAudioBody * 0.06) * (1.0 - smoothstep(0.40, 1.60, length(vUv * 2.0 - 1.0)));
+  float exposure = clamp(0.56 + uIntensity * 0.58 + uAudioBrightness * 0.22 + uRms * 0.14 - uSilence * 0.10, 0.48, 1.34);
+  col *= exposure;
 
   // ── Vignette ───────────────────────────────────────────────────────────────
   float vig = 1.0 - smoothstep(0.72, 1.55, length(vUv * 2.0 - 1.0)) * 0.78;
