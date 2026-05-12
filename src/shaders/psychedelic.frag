@@ -86,6 +86,48 @@ float fbm(vec2 p) {
   return v;
 }
 
+vec2 fbm2(vec2 p) {
+  vec2 v = vec2(0.0);
+  float a = 0.50;
+  float f = 1.0;
+  for (int i = 0; i < 4; i++) {
+    v += a * vec2(
+      noise(p * f + vec2(17.31, 9.17)),
+      noise((p + vec2(5.13, 21.71)) * f)
+    );
+    f *= 2.03;
+    a *= 0.50;
+  }
+  return v;
+}
+
+vec2 kaleido(vec2 p, float sectors) {
+  float r = length(p);
+  float a = atan(p.y, p.x);
+  float seg = 6.28318 / max(2.0, sectors);
+  a = abs(mod(a + seg * 0.5, seg) - seg * 0.5);
+  return vec2(cos(a), sin(a)) * r;
+}
+
+vec2 warpField(vec2 p, float tBase, float tDetail) {
+  float audioPresence = 1.0 - smoothstep(0.45, 1.0, uSilence);
+  float quietHold = mix(0.52, 1.0, audioPresence);
+  vec2 slowDrift = vec2(
+    sin(tBase * 0.47 + uCamDrift.x * 1.7),
+    cos(tBase * 0.39 + uCamDrift.y * 1.5)
+  ) * 0.16;
+
+  vec2 q = fbm2(p * (0.58 + uChaos * 0.25) + slowDrift + vec2(tBase * 0.035, -tBase * 0.028));
+  vec2 r = fbm2(p * (1.06 + uSurfaceEnergy * 0.18) + q * (1.04 + uChaos * 0.52)
+              + vec2(-tBase * 0.045 + tDetail * 0.012, tBase * 0.038));
+
+  float broadAmp = (0.055 + uChaos * 0.13 + uProcIntensity * 0.030 + uCoreEnergy * 0.045) * quietHold;
+  float detailAmp = (0.030 + uSurfaceEnergy * 0.055 + uMidHi * 0.016 + uBassMid * 0.014) * quietHold;
+  vec2 curlish = vec2(r.y - q.y, q.x - r.x);
+
+  return p + q * broadAmp + r * detailAmp + curlish * (uMidPulse * 0.012 + uBassPulse * 0.010) * audioPresence;
+}
+
 // 3-octave 3D FBM (SDF surface displacement — budget-conscious)
 float fbm3(vec3 p) {
   float v = 0.0, a = 0.5, f = 1.0;
@@ -211,19 +253,32 @@ void main() {
     cos(sUV.x * 4.8 + uTime * 2.7) * uDistortionSpike * 0.022
   ) * uDistortionSpike;
 
+  // Shared organic coordinates: evaluated once, then reused by camera/layers.
+  vec2 fieldUV = warpField(sUV, tBase, tDetail);
+  vec2 fieldNdc = fieldUV / vec2(aspect, 1.0);
+  float fieldDetail = 0.5 + 0.5 * fbm(fieldUV * 0.46 + vec2(tBase * 0.030, -tBase * 0.024));
+  float modeBias = (fieldDetail - 0.5) * (0.32 + uModeBlend.x * 0.20 + uModeBlend.y * 0.16 + uModeBlend.w * 0.14);
+  float kaleidoMix = (0.018 + uModeBlend.x * 0.034 + uModeBlend.y * 0.020 + uModeBlend.w * 0.014)
+                   * (0.65 + (1.0 - uSilence) * 0.35);
+  vec2 foldedUV = kaleido(fieldUV, 5.0 + uModeBlend.x * 2.0 + uModeBlend.w);
+  fieldUV = mix(fieldUV, foldedUV, kaleidoMix);
+  fieldNdc = fieldUV / vec2(aspect, 1.0);
+  sUV = fieldUV;
+
   // ── Mandala / radial influence layer ──────────────────────────────────────
   // Biases the FBM warp toward radial direction during peak/break. Never perfect.
   float radialBias = uEnergy * smoothstep(0.3, 0.85, uEnergy) * uPaletteShift * 0.45
                    + uCoreEnergy * smoothstep(0.3, 1.0, uCoreEnergy) * 0.14
                    + uModeBlend.x * 0.18
-                   + uBassPulse * 0.035;
-  float sectorCount = 5.0 + sin(uTime * 0.07) * 2.0;
-  vec2  radialP     = ndcUV;
+                   + uBassPulse * 0.035
+                   + modeBias * 0.08;
+  float sectorCount = 5.0 + sin(uTime * 0.07 + fieldDetail * 0.35) * 2.0;
+  vec2  radialP     = fieldNdc;
   float radialAngle = atan(radialP.y, radialP.x);
   float mandalaWarp = sin(radialAngle * sectorCount + uTime * 0.3) * radialBias * 0.06;
   sUV += normalize(radialP + vec2(0.0001)) * mandalaWarp;
 
-  float smoothSpin = (uModeBlend.y * (0.10 + uCoreEnergy * 0.24)) * (1.0 - smoothstep(0.0, 1.8, length(sUV)));
+  float smoothSpin = (uModeBlend.y * (0.10 + uCoreEnergy * 0.24 + modeBias * 0.08)) * (1.0 - smoothstep(0.0, 1.8, length(sUV)));
   float smoothSpinAngle = atan(sUV.y, sUV.x) + smoothSpin;
   sUV = mix(sUV, vec2(cos(smoothSpinAngle), sin(smoothSpinAngle)) * length(sUV), uModeBlend.y * 0.18);
 
@@ -331,7 +386,7 @@ void main() {
   float depth01   = clamp(tRay / maxDist, 0.0, 1.0);
   float depthFog  = 1.0 - exp(-tRay * 0.032);
   // Atmospheric fog color: cool near-black tinted by current palette
-  vec3  fogColor  = palette(uPaletteShift * 0.5) * 0.04;
+  vec3  fogColor  = palette(uPaletteShift * 0.5 + fieldDetail * 0.08) * (0.035 + fieldDetail * 0.012);
 
   vec3 col = vec3(0.0);
 
@@ -368,12 +423,12 @@ void main() {
     float glowStr = mix(0.48, 0.24, depth01);
     float glow    = exp(-minD * 2.4) * glowStr;
     vec2 bgFlow = vec2(
-      sin(t * 0.04 + sUV.y * 0.65) * 0.18,
-      cos(t * 0.035 + sUV.x * 0.55) * 0.14
+      sin(t * 0.04 + fieldUV.y * 0.65) * 0.18,
+      cos(t * 0.035 + fieldUV.x * 0.55) * 0.14
     ) + vec2(uLowMid * 0.025, -uBassPulse * 0.018);
-    float bgN = fbm(sUV * 0.42 + bgFlow + vec2(uPalettePhase * 0.05, -uPalettePhase * 0.03));
+    float bgN = fbm(fieldUV * 0.42 + bgFlow + vec2(uPalettePhase * 0.05, -uPalettePhase * 0.03));
     float bgT = bgN * 0.36 + 0.72 + uColorShift * 0.3;
-    vec3 bgFog = palette(bgT + 0.12) * (0.020 + bgN * 0.026 + uCoreEnergy * 0.018);
+    vec3 bgFog = palette(bgT + 0.12 + fieldDetail * 0.06) * (0.020 + bgN * 0.026 + fieldDetail * 0.010 + uCoreEnergy * 0.018);
     col  = palette(bgT) * glow * (0.26 + uCoreEnergy * 0.28);
     col += bgFog;
     col *= (1.0 - depthFog * 0.34);
@@ -383,7 +438,7 @@ void main() {
 
   // ── Subsurface proximity glow ─────────────────────────────────────────────
   float proxGlow = exp(-minD * minD * 18.0);
-  float proxT    = fbm(sUV * 0.28 + vec2(t * 0.05, 0.0)) * 0.4 + 0.72 + uColorShift * 0.3;
+  float proxT    = fbm(fieldUV * 0.28 + vec2(t * 0.05, 0.0)) * 0.4 + fieldDetail * 0.08 + 0.72 + uColorShift * 0.3;
   col += palette(proxT + 0.15) * proxGlow * (0.16 + uCoreEnergy * 0.30);
 
   // Secondary procedural texture, gated by flux so transients reveal detail
@@ -391,10 +446,10 @@ void main() {
   float fluxLift = smoothstep(0.02, 0.42, uSpectralFlux) * uProcIntensity;
   float cent = clamp(uSpectralCentroid, 0.0, 1.0);
   vec2 procFlow = vec2(
-    noise(sUV * 0.55 + vec2(tBase * 0.08, cent * 1.7)),
-    noise(sUV * 0.50 + vec2(-cent * 1.3, tBase * -0.06))
+    noise(fieldUV * 0.55 + vec2(tBase * 0.08, cent * 1.7)),
+    noise(fieldUV * 0.50 + vec2(-cent * 1.3, tBase * -0.06))
   );
-  float procN = 0.5 + 0.5 * noise(sUV * (0.85 + cent * 1.25) + procFlow * 0.42 + vec2(tBase * 0.05, -tBase * 0.04));
+  float procN = 0.5 + 0.5 * noise(fieldUV * (0.85 + cent * 1.25) + procFlow * 0.42 + vec2(tBase * 0.05, -tBase * 0.04));
   float procMask = smoothstep(0.38, 0.82, procN);
   float localMask = hitDist > 0.0 ? 0.70 : smoothstep(0.08, 0.55, proxGlow);
   float procStrength = (0.025 + fluxLift * 0.16 + uTreblePulse * 0.025) * uProcIntensity * localMask * (0.45 + uSurfaceEnergy * 0.62);
@@ -405,7 +460,7 @@ void main() {
   // only surface during peaks. No second pass needed — lives in the same shader.
   float energyMask = clamp(forceEnergySum + uSurfaceEnergy * 0.8 + uParticleEnergy * 0.32 + uBassHi * 0.38 + uMidPulse * 0.18, 0.0, 1.0);
   if (energyMask > 0.05) {
-    vec2  filUV  = sUV * 3.8 + vec2(t * 0.06, t * -0.04);
+    vec2  filUV  = fieldUV * 3.8 + vec2(t * 0.06 + modeBias * 0.08, t * -0.04);
     float filN   = fbm(filUV);
     float filLine = smoothstep(0.54, 0.58, filN) * smoothstep(0.62, 0.58, filN);
     float filT    = filN * 0.3 + uEnergy * 0.4 + uColorShift * 0.2;
@@ -417,7 +472,7 @@ void main() {
   col += palette(t * 0.4 + 0.5) * uColorSpike * 0.25;
 
   // ── Mouse energy ripple ────────────────────────────────────────────────────
-  float mDist = length(sUV - uMouse);
+  float mDist = length(fieldUV - uMouse);
   col += palette(t * 0.4 + 0.5) * exp(-mDist * 2.5) * uMouseVel * 0.55;
 
   // ── Hi shimmer + intensity ─────────────────────────────────────────────────
