@@ -74,6 +74,34 @@ float noise(vec2 p) {
         dot(hash2(i + vec2(1,1)),  f - vec2(1,1)), u.x), u.y);
 }
 
+float cellularEdge(vec2 p, float phase) {
+  vec2 cell = floor(p);
+  vec2 f = fract(p);
+  float nearest = 8.0;
+  float secondNearest = 8.0;
+
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec2 neighbor = vec2(float(x), float(y));
+      vec2 seed = hash2(cell + neighbor);
+      vec2 feature = 0.5 + 0.32 * sin(seed * 4.7 + phase + vec2(seed.y, seed.x) * 1.9);
+      vec2 delta = neighbor + feature - f;
+      float distSq = dot(delta, delta);
+
+      if (distSq < nearest) {
+        secondNearest = nearest;
+        nearest = distSq;
+      } else if (distSq < secondNearest) {
+        secondNearest = distSq;
+      }
+    }
+  }
+
+  float edgeGap = sqrt(secondNearest) - sqrt(nearest);
+  float softEdge = 1.0 - smoothstep(0.028, 0.170, edgeGap);
+  return softEdge * softEdge * (3.0 - 2.0 * softEdge);
+}
+
 // Cheap 3D noise: three 2D slices — avoids full 8-corner 3D interpolation
 float noise3(vec3 p) {
   return (noise(p.xy + p.z * 1.7321)
@@ -509,9 +537,11 @@ void main() {
     // ── Surface: diffuse volume + gated detail ──────────────────────────────
     vec3  p    = ro + rd * hitDist;
     vec3  nrm  = calcNormal(p, tJitter, tBase, uBass, uMid, uChaos, uMode);
-    vec3  lDir = normalize(vec3(sin(t * 0.35) * 1.2, 0.8, cos(t * 0.35) * 1.2));
-
-    float diff    = max(0.0, dot(nrm, lDir)) * 0.48 + 0.26 + uCoreEnergy * 0.12;
+    vec3  lDir  = normalize(vec3(sin(t * 0.35) * 1.2, 0.8, cos(t * 0.35) * 1.2));
+    vec3  lFill = normalize(vec3(-sin(t * 0.27) * 0.9, -0.55, -cos(t * 0.27) * 0.9));
+    float wrapKey  = dot(nrm, lDir)  * 0.5 + 0.5;
+    float wrapFill = dot(nrm, lFill) * 0.5 + 0.5;
+    float diff = wrapKey * 0.46 + wrapFill * 0.18 + 0.20 + uCoreEnergy * 0.12;
 
     // t driven by value + energy + depth: foreground/high-energy → magenta/cyan
     float noiseV  = fbm3(p * 0.55 + t * 0.08);
@@ -590,6 +620,24 @@ void main() {
   float procStrength = (0.020 + fluxLift * 0.12 + uTreblePulse * 0.018 + uAudioDetail * 0.016 + uAudioTurbulence * 0.022)
                      * uProcIntensity * localMask * (0.42 + uSurfaceEnergy * 0.50);
   col += palette(procN * 0.22 + cent * 0.18 + uPalettePhase * 0.12 + 0.58) * procMask * procStrength;
+
+  // Cellular veins: low-contrast membrane detail revealed by highs, not an overlay.
+  float silenceSettle = mix(0.18, 1.0, audioPresence) * (1.0 - smoothstep(0.68, 1.0, uSilence) * 0.42);
+  float veinTime = tBase * mix(0.018, 0.090, audioPresence);
+  vec2 veinUV = fieldUV * (1.48 + fieldDetail * 0.34 + procN * 0.12)
+              + organicAsym * 0.10
+              + vec2(veinTime * 0.26, -veinTime * 0.19);
+  float veinEdge = cellularEdge(veinUV, veinTime + uPalettePhase * 0.12);
+  float veinBreakup = smoothstep(0.30, 0.88, procN * 0.55 + fieldDetail * 0.45);
+  float veinReveal = smoothstep(0.05, 0.80, uHighMid * 0.70 + uTreble * 0.34 + uTreblePulse * 0.46)
+                   + uOnset * audioPresence * 0.16;
+  veinReveal = clamp(veinReveal, 0.0, 1.0);
+  float veinSurfaceMask = hitDist > 0.0 ? 0.28 * (1.0 - silhouetteSoft * 0.86) : 0.0;
+  float veinAtmosphereMask = 0.0;
+  float veinMask = (veinSurfaceMask + veinAtmosphereMask) * (0.42 + uSurfaceEnergy * 0.40) * uProcIntensity;
+  float veinStrength = clamp(veinEdge * veinBreakup * veinReveal * veinMask * silenceSettle, 0.0, 0.008);
+  vec3 veinColor = palette(0.54 + fieldDetail * 0.15 + procN * 0.10 + uPalettePhase * 0.10 + uColorShift * 0.14);
+  col += veinColor * veinStrength;
 
   // ── Energy filaments: sparse curved streaks, visible only during energetic moments ──
   // Threshold FBM at a tight band → sparse arcs; mask by energy+force so they
