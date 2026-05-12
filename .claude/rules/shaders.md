@@ -111,7 +111,8 @@ Target 60 fps on M1 / mid-range desktop GPU. Red flags:
 ## Visual iteration loop (execute mode only)
 After any visual change, run this loop before reporting the task done:
 
-1. Ensure `npm run dev` is running. Ask the user to capture three screenshots: **calm** (no audio, blob idling), **mid** (music at moderate volume), **peak** (bass-heavy moment). Save as `screenshots/calm.png`, `screenshots/mid.png`, `screenshots/peak.png`.
-2. Read all three via the Read tool and evaluate against: **motion smoothness**, **depth** (front-to-back separation), **cohesion** (field + particles feel like one system), **visual noise** (clutter, banding, strobing), **evolution** (slow drift, variety over time).
-3. If a screenshot shows a defect, make ONE corrective change and re-loop. Do not stack untested changes.
-4. This loop is execute-mode only — plan mode cannot run the dev server.
+1. Ensure `npm run dev` is running.
+2. Capture screenshots with Puppeteer by default. Use `npm run screenshot -- --url http://127.0.0.1:<port>/ --out screenshots/calm.png` for the idle/calm state. For mid and peak states, drive the app as needed with Puppeteer or a focused script and save `screenshots/mid.png` and `screenshots/peak.png`.
+3. Read all three captures and evaluate against: **motion smoothness**, **depth** (front-to-back separation), **cohesion** (field + particles feel like one system), **visual noise** (clutter, banding, strobing), **evolution** (slow drift, variety over time).
+4. If a screenshot shows a defect, make ONE corrective change and re-loop. Do not stack untested changes.
+5. This loop is execute-mode only — plan mode cannot run the dev server.

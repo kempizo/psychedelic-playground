@@ -43,6 +43,8 @@ These are non-obvious and break things if violated. Path-scoped details live in 
 
 8. **Mode continuity is local to the render loop.** UI buttons and store `mode` values still switch immediately, but `useThreeScene.js` eases visual transition state, palette family, trail hold, and particle spawn style. Do not move this into UI state without an explicit architecture change.
 
+9. **Browser screenshots default to Puppeteer.** When Codex needs to inspect, screenshot, compare, or visually verify an HTML page in this repo, default to the local Puppeteer workflow: start the app with `npm run dev`, then run `npm run screenshot -- --url http://127.0.0.1:<port>/ --out screenshots/<name>.png`. Only use a different browser tool when the task explicitly needs an authenticated/profile browser, manual user interaction, or a browser-specific debugging surface.
+
 ## File map
 
 ```
