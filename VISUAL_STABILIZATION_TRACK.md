@@ -421,6 +421,7 @@ For each future implementation pass:
 
 | Date | Change |
 |---|---|
+| 2026-05-12 | ✅ Stabilization Pass S4 reduced non-mode-defining kaleidoscopic symmetry by softening fold, mandala, vortex, orbit, and filament-trap strength while adding subtle existing-input organic asymmetry without changing controls, uniforms, URLs, presets, mode IDs, render order, particles, or visual expansion scope. |
 | 2026-05-12 | ✅ Stabilization Pass S3 added silence hysteresis, low-energy pulse damping, calmer behavioral drift, and render-loop-only idle breathing/particle quieting without changing controls, uniforms, URLs, presets, mode IDs, render order, particles, or visual expansion scope. |
 | 2026-05-12 | ✅ Stabilization Pass S2 smoothed render-loop-only visual response for texture intensity, camera distance, trail decay, particle density, mode blending, and palette-family transitions without changing controls, uniforms, URLs, presets, mode IDs, render order, particles, or visual expansion scope. |
 | 2026-05-12 | ✅ Stabilization Pass SX separated direct canvas interaction forces from audio/idle disturbances, disabled random auto pulses, lowered mode-transition trail persistence with existing-buffer clears, and softened trail drift/edge/chroma feedback without changing render order, controls, uniforms, URLs, presets, mode IDs, particles, or visual expansion scope. |

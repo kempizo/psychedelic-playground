@@ -314,27 +314,39 @@ void main() {
   vec2 fieldUV = warpField(sUV, tBase, tDetail);
   float fieldDetail = 0.5 + 0.5 * fbm(fieldUV * 0.46 + vec2(tBase * 0.030, -tBase * 0.024));
   float modeBias = (fieldDetail - 0.5) * (0.32 + uModeBlend.x * 0.20 + uModeBlend.y * 0.16 + uModeBlend.w * 0.14);
+  float asymmetryGate = clamp(1.0 - modeRadial * 0.45, 0.35, 1.0);
+  vec2 organicAsym = fbm2(
+    fieldUV * (0.34 + uAudioMorph * 0.08)
+    + vec2(tBase * 0.021 + uCamDrift.x * 0.80, -tBase * 0.017 + uCamDrift.y * 0.80)
+    + uMouse * 0.08
+  );
+  float asymPhase = dot(organicAsym, vec2(1.7, -1.2)) + modeBias * 0.70 + uCamDrift.x * 0.35 - uCamDrift.y * 0.28;
+  float asymStrength = (0.012 + uAudioMorph * 0.014 + uAudioTurbulence * 0.010 + abs(modeBias) * 0.020) * asymmetryGate;
+  fieldUV += organicAsym * asymStrength;
 
   float spiralAmount = (0.026 + uAudioMorph * 0.060 + uAudioPulse * 0.030 + uAudioTurbulence * 0.030)
                      * (0.32 + modeFluid * 0.28 + modeRadial * 0.30 + modeVortex * 1.35 + modeCollapse * 0.42 + modeOrbit * 0.46)
                      * mix(0.48, 1.0, audioPresence);
-  fieldUV = spiralWarp(fieldUV, spiralAmount, tBase * (0.40 + modeVortex * 0.32) + uAudioTurbulence * 1.35 + modeBias * 0.45);
+  fieldUV = spiralWarp(fieldUV, spiralAmount, tBase * (0.40 + modeVortex * 0.32) + uAudioTurbulence * 1.35 + modeBias * 0.45 + asymPhase * 0.10);
 
-  float foldSectors = 4.5 + modeRadial * 3.0 + modeOrbit * 1.5 + modeCollapse * 0.7;
+  float foldSectors = 4.35 + modeRadial * 2.85 + modeOrbit * 0.95 + modeCollapse * 0.35 + asymPhase * 0.28;
   float foldPhase = tBase * (0.16 + modeVortex * 0.22 + modeOrbit * 0.28)
-                  + uAudioPulse * 0.42 + modeOrbit * 2.094;
-  float kaleidoMix = (0.014 + modeFluid * 0.008 + modeRadial * 0.105 + modeVortex * 0.050 + modeCollapse * 0.030 + modeOrbit * 0.082)
-                   * (0.58 + audioPresence * 0.42 + uAudioMorph * 0.18);
-  vec2 foldedUV = kaleidoFold(fieldUV, foldSectors, foldPhase, 1.0);
+                  + uAudioPulse * 0.42 + modeOrbit * 2.094 + asymPhase * 0.18 + uMouse.x * 0.06;
+  float kaleidoMix = (0.006 + modeFluid * 0.003 + modeRadial * 0.095 + modeVortex * 0.032 + modeCollapse * 0.014 + modeOrbit * 0.046)
+                   * (0.54 + audioPresence * 0.36 + uAudioMorph * 0.12);
+  float foldAmount = clamp(0.74 + modeRadial * 0.18 + modeOrbit * 0.10 + uAudioPulse * 0.03, 0.0, 0.98);
+  vec2 foldedUV = kaleidoFold(fieldUV, foldSectors, foldPhase, foldAmount);
   fieldUV = mix(fieldUV, foldedUV, kaleidoMix);
+  fieldUV += organicAsym.yx * vec2(0.006, -0.005) * (1.0 - modeRadial * 0.55 + uAudioTurbulence * 0.35);
 
   float collapsePull = modeCollapse * (0.024 + uAudioBody * 0.050 + uAudioPulse * 0.026)
                      * (1.0 - smoothstep(0.18, 1.80, length(fieldUV)));
   fieldUV *= 1.0 - collapsePull;
 
   vec2 orbitOffset = vec2(cos(foldPhase), sin(foldPhase)) * (0.018 + uAudioMorph * 0.018) * modeOrbit;
-  vec2 orbitFold = kaleidoFold(fieldUV + orbitOffset, 3.0, foldPhase * 0.55, 0.92) - orbitOffset;
-  fieldUV = mix(fieldUV, orbitFold, modeOrbit * (0.030 + uAudioMorph * 0.040));
+  vec2 orbitSeed = fieldUV + orbitOffset + organicAsym * (0.010 + uAudioMorph * 0.006) * modeOrbit;
+  vec2 orbitFold = kaleidoFold(orbitSeed, 3.0 + asymPhase * 0.08, foldPhase * 0.55 + asymPhase * 0.11, 0.78) - orbitOffset;
+  fieldUV = mix(fieldUV, orbitFold, modeOrbit * (0.018 + uAudioMorph * 0.026));
 
   vec2 fieldNdc = fieldUV / vec2(aspect, 1.0);
   sUV = fieldUV;
@@ -342,19 +354,20 @@ void main() {
   // ── Mandala / radial influence layer ──────────────────────────────────────
   // Biases the FBM warp toward radial direction during peak/break. Never perfect.
   float radialBias = uEnergy * smoothstep(0.3, 0.85, uEnergy) * uPaletteShift * 0.45
-                   + uCoreEnergy * smoothstep(0.3, 1.0, uCoreEnergy) * 0.14
-                   + uModeBlend.x * 0.18
+                   + uCoreEnergy * smoothstep(0.3, 1.0, uCoreEnergy) * 0.10
+                   + uModeBlend.x * 0.16
                    + uBassPulse * 0.035
                    + modeBias * 0.08;
-  float sectorCount = 5.0 + sin(uTime * 0.07 + fieldDetail * 0.35) * 2.0;
+  float sectorCount = 5.0 + sin(uTime * 0.07 + fieldDetail * 0.35 + asymPhase * 0.20) * 1.4 + asymPhase * 0.45;
   vec2  radialP     = fieldNdc;
   float radialAngle = atan(radialP.y, radialP.x);
-  float mandalaWarp = sin(radialAngle * sectorCount + uTime * 0.3) * radialBias * 0.06;
+  float mandalaWarp = sin(radialAngle * sectorCount + uTime * 0.3 + organicAsym.x * 0.35) * radialBias * (0.052 + modeRadial * 0.010);
   sUV += normalize(radialP + vec2(0.0001)) * mandalaWarp;
 
-  float smoothSpin = (uModeBlend.y * (0.10 + uCoreEnergy * 0.24 + modeBias * 0.08)) * (1.0 - smoothstep(0.0, 1.8, length(sUV)));
-  float smoothSpinAngle = atan(sUV.y, sUV.x) + smoothSpin;
-  sUV = mix(sUV, vec2(cos(smoothSpinAngle), sin(smoothSpinAngle)) * length(sUV), uModeBlend.y * 0.18);
+  float smoothSpin = (uModeBlend.y * (0.075 + uCoreEnergy * 0.20 + modeBias * 0.06)) * (1.0 - smoothstep(0.0, 1.8, length(sUV)));
+  float smoothSpinAngle = atan(sUV.y + organicAsym.y * 0.018, sUV.x + organicAsym.x * 0.018) + smoothSpin + asymPhase * 0.035;
+  vec2 spunUV = vec2(cos(smoothSpinAngle), sin(smoothSpinAngle)) * length(sUV + organicAsym * 0.010);
+  sUV = mix(sUV, spunUV + organicAsym * 0.012 * modeVortex, uModeBlend.y * 0.14);
 
   // ── Virtual camera ─────────────────────────────────────────────────────────
   vec3 ro, rd;
@@ -561,11 +574,11 @@ void main() {
   // only surface during peaks. No second pass needed — lives in the same shader.
   float energyMask = clamp(forceEnergySum * 0.80 + uSurfaceEnergy * 0.64 + uParticleEnergy * 0.26 + uBassHi * 0.30 + uMidPulse * 0.14, 0.0, 1.0);
   if (energyMask > 0.08) {
-    vec2  filUV  = fieldUV * 3.8 + vec2(t * 0.06 + modeBias * 0.08, t * -0.04);
+    vec2  filUV  = fieldUV * 3.8 + vec2(t * 0.06 + modeBias * 0.08, t * -0.04) + organicAsym * 0.22;
     float filN   = fbm(filUV);
     float filLine = smoothstep(0.54, 0.58, filN) * smoothstep(0.62, 0.58, filN);
-    float trapLine = orbitTrapMask(filUV * (0.22 + modeCollapse * 0.05 + modeOrbit * 0.04), tBase * 0.32 + uAudioMorph * 0.9 + modeBias);
-    float filamentMix = clamp(0.30 + modeCollapse * 0.34 + modeOrbit * 0.18 + uAudioDetail * 0.22, 0.0, 0.82);
+    float trapLine = orbitTrapMask(filUV * (0.18 + modeCollapse * 0.04 + modeOrbit * 0.035), tBase * 0.32 + uAudioMorph * 0.9 + modeBias + asymPhase * 0.24);
+    float filamentMix = clamp(0.18 + modeCollapse * 0.22 + modeOrbit * 0.12 + uAudioDetail * 0.16, 0.0, 0.58);
     filLine = mix(filLine, trapLine, filamentMix);
     float filT    = filN * 0.3 + uEnergy * 0.4 + uColorShift * 0.2 + uAudioBrightness * 0.08;
     float filamentSilhouetteMask = hitDist > 0.0 ? (1.0 - silhouetteSoft * 0.68) : 1.0;
