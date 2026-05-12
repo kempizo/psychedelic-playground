@@ -492,6 +492,15 @@ void main() {
   float audioAtmosphere = smoothstep(0.16, 0.72, uEnergy + uOnset * 0.28 + uTreblePulse * 0.16 + uAudioBrightness * 0.22);
   // Atmospheric fog color: cool near-black tinted by current palette
   vec3  fogColor  = palette(uPaletteShift * 0.5 + fieldDetail * 0.08) * (0.035 + fieldDetail * 0.012);
+  float atmosphereLift = mix(0.58, 1.0, audioPresence) * (0.70 + audioAtmosphere * 0.30);
+  vec2 atmosphereFlow = organicAsym * 0.16
+                      + vec2(sin(tBase * 0.12 + modeBias), cos(tBase * 0.10 - modeBias)) * 0.10
+                      + uCamDrift * 0.05;
+  float vaporBroad = 0.5 + 0.5 * fbm(fieldUV * 0.31 + atmosphereFlow + vec2(tBase * 0.018, -tBase * 0.014));
+  float vaporFine = 0.5 + 0.5 * noise(fieldUV * 0.82 + atmosphereFlow.yx * 0.35 + vec2(-tBase * 0.025, tBase * 0.020));
+  float vaporMist = smoothstep(0.24, 0.90, mix(vaporBroad, vaporFine, 0.22));
+  float screenHazeMask = 1.0 - smoothstep(1.02, 1.72, length(vUv * 2.0 - 1.0));
+  float depthHaze = smoothstep(0.12, 0.82, depth01) * screenHazeMask;
 
   vec3 col = vec3(0.0);
   float silhouetteSoft = 0.0;
@@ -547,6 +556,19 @@ void main() {
     col += palette(bgT + 0.30) * depthFog * 0.024 * (0.4 + uCoreEnergy * 0.16);
     col  = mix(col, fogColor, smoothstep(0.5, 1.0, depth01));
   }
+
+  // ── Organic atmosphere: low-amplitude vapor and depth, never a hard outline ─
+  float missMask = hitDist > 0.0 ? 0.0 : 1.0;
+  float surfaceMask = hitDist > 0.0 ? (1.0 - silhouetteSoft * 0.82) * smoothstep(0.10, 0.72, depth01) : 0.0;
+  float proximityMist = smoothstep(0.08, 0.58, edgeProximity) * (1.0 - smoothstep(0.62, 0.94, edgeProximity));
+  float atmosphereMask = vaporMist * atmosphereLift * (
+    missMask * depthHaze * 0.020 +
+    proximityMist * screenHazeMask * (0.012 + audioAtmosphere * 0.010) +
+    surfaceMask * (0.006 + audioAtmosphere * 0.005)
+  );
+  vec3 atmosphereColor = palette(0.62 + fieldDetail * 0.12 + vaporMist * 0.08 + uColorShift * 0.18 + uPalettePhase * 0.08)
+                       * (0.030 + fieldDetail * 0.010);
+  col += atmosphereColor * clamp(atmosphereMask, 0.0, 0.035);
 
   // ── Subsurface proximity glow ─────────────────────────────────────────────
   float proxGlow = exp(-minD * minD * 4.6);
