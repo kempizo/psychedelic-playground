@@ -421,6 +421,7 @@ For each future implementation pass:
 
 | Date | Change |
 |---|---|
+| 2026-05-12 | ✅ Stabilization Pass S6 unified blob/trail/particle/EnergyIndicator intensity around a single render-loop journey scalar derived from existing controller/audio/visualState signals, without changing controls, uniforms, URLs, presets, mode IDs, render order, particles, or visual expansion scope. |
 | 2026-05-12 | ✅ Stabilization Pass S5 refined the existing CPU particle ecosystem with capacity-aware spawning, calmer idle dust, bounded collision bursts, dt-based particle aging, and softer particle alpha/size falloff without changing controls, uniforms, URLs, presets, mode IDs, render order, or particle architecture. |
 | 2026-05-12 | ✅ Stabilization Pass S4 reduced non-mode-defining kaleidoscopic symmetry by softening fold, mandala, vortex, orbit, and filament-trap strength while adding subtle existing-input organic asymmetry without changing controls, uniforms, URLs, presets, mode IDs, render order, particles, or visual expansion scope. |
 | 2026-05-12 | ✅ Stabilization Pass S3 added silence hysteresis, low-energy pulse damping, calmer behavioral drift, and render-loop-only idle breathing/particle quieting without changing controls, uniforms, URLs, presets, mode IDs, render order, particles, or visual expansion scope. |

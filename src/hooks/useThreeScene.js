@@ -426,6 +426,8 @@ export function useThreeScene(canvasRef) {
     const camDrift = new THREE.Vector2(0, 0)
     // Smoothed cross-band products (EMA, tau ~0.1s)
     let smoothBassMid = 0, smoothMidHi = 0, smoothBassHi = 0
+    // S6: render-loop-only journey scalar — aligns blob/trail/particles/EnergyIndicator
+    const journey = { value: 0, transient: 0 }
 
     // Curl noise: divergence-free 2D velocity field from gradient of a scalar noise.
     // Uses finite differences on a smooth hash to approximate ∂n/∂y and -∂n/∂x.
@@ -614,7 +616,7 @@ export function useThreeScene(canvasRef) {
       frameCount++
       if (frameCount % 3 === 0) {
         useStore.getState().setEnergySnapshot({
-          energy: bOut.state === 'peak' ? 1.0 : controller.energy,
+          energy: clamp01(Math.max(controller.energy, journey.value)),
           state: bOut.state,
           breakIntensity: bOut.breakIntensity,
         })
@@ -748,6 +750,22 @@ export function useThreeScene(canvasRef) {
       smoothMidHi   += ((midNL * 0.55 + highMidNL * 0.45) * hiNL - smoothMidHi)  * crossLerp
       smoothBassHi  += (bassNL * (highMidNL * 0.45 + trebleNL * 0.55) - smoothBassHi)  * crossLerp
 
+      // S6: journey scalar — per-state floor/ceiling keeps calm<build<peak>afterglow arc
+      const stateFloors = { calm: 0.0, build: 0.05, peak: 0.18, afterglow: 0.0 }
+      const stateCeils  = { calm: 0.55, build: 0.85, peak: 1.0,  afterglow: 0.72 }
+      const stFloor = stateFloors[bOut.state] ?? 0.0
+      const stCeil  = stateCeils[bOut.state]  ?? 1.0
+      const journeyTarget = clamp01(Math.min(stCeil, Math.max(stFloor,
+        controller.energy * 0.38 + predictedEnergy * 0.26 + visualState.audioBody * 0.20 + visualState.audioBrightness * 0.12 + visualState.coreEnergy * 0.04
+      )))
+      const journeyTransientTarget = clamp01(visualState.audioPulse * 0.35 + onset * 0.25)
+      const journeyAttack   = 1 - Math.exp(-dt / 0.10)
+      const journeyRelease  = 1 - Math.exp(-dt / 0.55)
+      const journeyTAttack  = 1 - Math.exp(-dt / 0.04)
+      const journeyTRelease = 1 - Math.exp(-dt / 0.30)
+      journey.value     = clamp01(journey.value     + (journeyTarget          - journey.value)     * (journeyTarget          > journey.value     ? journeyAttack  : journeyRelease))
+      journey.transient = clamp01(journey.transient + (journeyTransientTarget - journey.transient) * (journeyTransientTarget > journey.transient ? journeyTAttack : journeyTRelease))
+
       // bass+hi spike → broad center pressure, not a localized click ripple.
       if (smoothBassHi > 0.35 && (elapsed - lastBassSpawn) > 0.4) {
         spawnAudioBreath(0, 0, Math.min(smoothBassHi * 0.18, 0.18))
@@ -795,7 +813,7 @@ export function useThreeScene(canvasRef) {
           mainUniforms.uForceMeta.value[i].set(0, 0, 0, 0)
         }
       }
-      mainUniforms.uEnergy.value     = controller.energy
+      mainUniforms.uEnergy.value     = clamp01(controller.energy * 0.65 + journey.value * 0.35 + journey.transient * 0.10)
       mainUniforms.uBassMid.value    = smoothBassMid
       mainUniforms.uMidHi.value      = smoothMidHi
       mainUniforms.uBassHi.value     = smoothBassHi
@@ -864,14 +882,14 @@ export function useThreeScene(canvasRef) {
       const baseDecay = Math.max(0.70, Math.min(0.94, (bOut.trailDecay ?? modeDecay) + userDecayOffset))
       const minDecay = Math.max(0.68, baseDecay - 0.06)
       const transitionClear = (1 - modeTransition) * 0.14
-      const bassClear = mainUniforms.uBass.value * 0.035
+      const bassClear = mainUniforms.uBass.value * 0.035 * (1 - smoothstep05(journey.value, 0.45, 0.80) * 0.20)
       const targetDecay = Math.max(0.68, Math.min(0.94, Math.max(minDecay, baseDecay - bassClear - transitionClear)))
       const trailTau = transitionClear > 0.01 ? 0.11 : 0.24
       smoothTrailDecay += (targetDecay - smoothTrailDecay) * (1 - Math.exp(-dt / trailTau))
       trailUniforms.uDecay.value = smoothTrailDecay
       trailUniforms.uEnergy.value = visualState.particleEnergy
       trailUniforms.uBeatPhase.value = visualState.beatPhase
-      trailUniforms.uFlow.value = Math.min(1, lowMidNL * 0.32 + midNL * 0.28 + bassPulse * 0.20 + visualState.surfaceEnergy * 0.35)
+      trailUniforms.uFlow.value = Math.min(1, lowMidNL * 0.32 + midNL * 0.28 + bassPulse * 0.20 + visualState.surfaceEnergy * 0.35 + journey.value * 0.20)
       trailUniforms.uOnset.value = onset
       trailUniforms.uTreble.value = Math.min(1, trebleNL)
       trailUniforms.uAudioDetail.value = visualState.audioDetail
@@ -920,7 +938,8 @@ export function useThreeScene(canvasRef) {
       const capacityGate = 1 - smoothstep05(crowding, 0.58, 0.92)
       const transitionSpawnGate = 0.62 + modeTransition * 0.38
       const calmSpawnGate = bOut.state === 'calm' ? 0.62 : 1
-      const spawnRate = hiVal * (1.15 + beatConfidence * 1.35 + visualState.audioDetail * 0.70) * density * livingGate * capacityGate * transitionSpawnGate * calmSpawnGate
+      const journeyGate = 0.55 + journey.value * 0.55
+      const spawnRate = hiVal * (1.15 + beatConfidence * 1.35 + visualState.audioDetail * 0.70) * density * livingGate * capacityGate * transitionSpawnGate * calmSpawnGate * journeyGate
       const particleThreshold = 0.13 + silenceHold * 0.06 + crowding * 0.08
       if (density > 0.01 && hiVal > lastHi * 0.95 && hiVal > particleThreshold && livingGate > 0.22 && capacityGate > 0.04) {
         const wholeSpawns = Math.floor(spawnRate)
