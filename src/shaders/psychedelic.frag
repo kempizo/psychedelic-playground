@@ -204,15 +204,15 @@ vec3 palette(float t) {
 // ── SDF: organic blob ──────────────────────────────────────────────────────────
 // tBase param is the slow evolution time used for the ambient breathing term
 float sdfBlob(vec3 p, float t, float tBase, float bass, float mid, float chaos) {
-  float warp = chaos * (1.0 + uSurfaceEnergy * 0.48 + uLowMid * 0.16) + 0.3 + uBassPulse * 0.06;
-  vec3 q = p + warp * 0.35 * vec3(
-    sin(p.y * 2.1 + t * 1.1) + cos(p.z * 1.7 + t * 0.8),
-    cos(p.x * 1.9 + t * 0.7) + sin(p.z * 2.3 + t * 1.2),
-    sin(p.x * 1.5 + t * 0.9) + cos(p.y * 2.7 + t * 0.6)
+  float warp = chaos * (0.92 + uSurfaceEnergy * 0.32 + uLowMid * 0.12) + 0.28 + uBassPulse * 0.045;
+  vec3 q = p + warp * 0.30 * vec3(
+    sin(p.y * 1.85 + t * 1.0) + cos(p.z * 1.48 + t * 0.72),
+    cos(p.x * 1.72 + t * 0.64) + sin(p.z * 2.04 + t * 1.04),
+    sin(p.x * 1.36 + t * 0.80) + cos(p.y * 2.34 + t * 0.54)
   );
   float coreFlow = fbm3(q * (0.72 + uRms * 0.08) + tBase * 0.08) * (0.18 + uCoreEnergy * 0.22 + uBassPulse * 0.04);
-  float surfaceFlow = fbm3(q * (1.45 + uSurfaceEnergy * 0.45 + uHighMid * 0.18) + t * 0.17) * (0.12 + mid * 0.18 + uLowMid * 0.08 + uSurfaceEnergy * 0.20);
-  float disp = coreFlow + surfaceFlow + uBassMid * 0.08 + uMidPulse * 0.035;
+  float surfaceFlow = fbm3(q * (1.18 + uSurfaceEnergy * 0.28 + uHighMid * 0.08) + t * 0.13) * (0.085 + mid * 0.13 + uLowMid * 0.055 + uSurfaceEnergy * 0.12);
+  float disp = coreFlow + surfaceFlow + uBassMid * 0.060 + uMidPulse * 0.024;
   // Two incommensurate sinusoids ensure the orb is always alive at silence
   float breath = sin(tBase * 0.7) * 0.015 + sin(tBase * 0.31) * 0.008;
   return (length(q) - (0.86 + uCoreEnergy * 0.22 + bass * 0.10 + uBassPulse * 0.045 + disp + breath)) * 0.70;
@@ -456,16 +456,32 @@ void main() {
     if (tRay > maxDist) break;
   }
 
+  if (hitDist > 0.0) {
+    for (int i = 0; i < 3; i++) {
+      vec3 p = ro + rd * hitDist;
+      float d;
+      if (uMode == 4) {
+        d = sdfOrbit(p, tJitter, tBase, uBass, uMid, uChaos);
+      } else {
+        float collapseMod = uMode == 3 ? (uBass - uMid) * 0.20 : 0.0;
+        d = sdfBlob(p, tJitter, tBase, uBass + collapseMod, uMid, uChaos);
+      }
+      hitDist = clamp(hitDist + d * 0.72, 0.08, maxDist);
+      minD = min(minD, abs(d));
+    }
+  }
+
   // depth01: 0 = close foreground, 1 = far background / miss
   float depth01   = clamp(tRay / maxDist, 0.0, 1.0);
   float depthFog  = 1.0 - exp(-tRay * 0.032);
-  float edgeProximity = exp(-minD * minD * 12.0);
-  float edgeFeather = smoothstep(0.04, 0.78, edgeProximity);
-  float edgeEnergy = smoothstep(0.18, 0.58, uEnergy + uOnset * 0.45 + uTreblePulse * 0.25 + uAudioBrightness * 0.18);
+  float edgeProximity = exp(-minD * minD * 5.5);
+  float edgeFeather = smoothstep(0.10, 0.92, edgeProximity);
+  float audioAtmosphere = smoothstep(0.16, 0.72, uEnergy + uOnset * 0.28 + uTreblePulse * 0.16 + uAudioBrightness * 0.22);
   // Atmospheric fog color: cool near-black tinted by current palette
   vec3  fogColor  = palette(uPaletteShift * 0.5 + fieldDetail * 0.08) * (0.035 + fieldDetail * 0.012);
 
   vec3 col = vec3(0.0);
+  float silhouetteSoft = 0.0;
 
   if (hitDist > 0.0) {
     // ── Surface: diffuse volume + gated detail ──────────────────────────────
@@ -479,28 +495,32 @@ void main() {
     float noiseV  = fbm3(p * 0.55 + t * 0.08);
     float surfaceDetail = fbm3(p * (2.0 + uSurfaceEnergy * 1.2 + uHighMid * 0.7) + tDetail * (0.16 + uTreble * 0.035));
     float surfDepth = clamp(hitDist / maxDist, 0.0, 1.0);
+    float viewSoft = pow(1.0 - abs(dot(nrm, -rd)), 2.15);
+    float grazingSoft = smoothstep(0.34, 0.92, viewSoft);
+    silhouetteSoft = grazingSoft;
+    float interiorDetailMask = 1.0 - grazingSoft * 0.72;
     float ct      = noiseV * 0.25 + uEnergy * 0.30 + (1.0 - surfDepth) * 0.25
                   + uPaletteShift * 0.20 + uColorShift * 0.25 + uMidHi * 0.08
-                  + surfaceDetail * (uSurfaceEnergy * 0.10 + uMidPulse * 0.03)
+                  + surfaceDetail * interiorDetailMask * (uSurfaceEnergy * 0.10 + uMidPulse * 0.03)
                   + uSpectralCentroid * 0.04 + uAudioBrightness * 0.07 + uAudioMorph * 0.04;
 
     col  = palette(ct) * diff;
-    col += palette(ct + 0.18) * surfaceDetail * (uSurfaceEnergy * 0.12 + uHighMid * 0.035);
-    float viewSoft = pow(1.0 - abs(dot(nrm, -rd)), 2.6);
-    col += palette(ct + 0.35) * viewSoft * (0.035 + uHi * 0.030 + edgeEnergy * 0.045) * (1.0 - surfDepth * 0.42);
+    col += palette(ct + 0.18) * surfaceDetail * interiorDetailMask * (uSurfaceEnergy * 0.12 + uHighMid * 0.035);
+    col += palette(ct + 0.35) * viewSoft * (0.016 + uHi * 0.010 + audioAtmosphere * 0.006) * (1.0 - surfDepth * 0.42) * interiorDetailMask;
     float surfaceEdgeFill = smoothstep(0.12, 0.80, viewSoft) * edgeFeather;
-    col += palette(ct + 0.12) * surfaceEdgeFill * (0.026 + uCoreEnergy * 0.022 + edgeEnergy * 0.018) * (1.0 - surfDepth * 0.35);
+    col += palette(ct + 0.12) * surfaceEdgeFill * (0.010 + uCoreEnergy * 0.008 + audioAtmosphere * 0.003) * (1.0 - surfDepth * 0.35);
     col += palette(ct + 0.50) * 0.04;
     col += uCoreEnergy * palette(ct + 0.15) * 0.13;
     col *= (1.0 - surfDepth * 0.15);
+    col = mix(col, fogColor, grazingSoft * (0.16 + audioAtmosphere * 0.05) * (1.0 - surfDepth * 0.22));
     // Atmospheric fog: blend toward near-black at depth
     col  = mix(col, fogColor, smoothstep(0.3, 0.9, surfDepth));
 
   } else {
     // ── Volumetric glow: near-miss rays accumulate fog ───────────────────────
     // Glow stronger in foreground (small depth01), fades at back
-    float glowStr = mix(0.16, 0.08, depth01);
-    float glow    = exp(-minD * 1.7) * glowStr * (0.04 + edgeEnergy * 0.96);
+    float glowStr = mix(0.13, 0.07, depth01);
+    float glow    = exp(-minD * 0.95) * glowStr * (0.055 + audioAtmosphere * 0.13 + uCoreEnergy * 0.05);
     vec2 bgFlow = vec2(
       sin(t * 0.04 + fieldUV.y * 0.65) * 0.18,
       cos(t * 0.035 + fieldUV.x * 0.55) * 0.14
@@ -516,10 +536,10 @@ void main() {
   }
 
   // ── Subsurface proximity glow ─────────────────────────────────────────────
-  float proxGlow = exp(-minD * minD * 10.0);
+  float proxGlow = exp(-minD * minD * 4.6);
   float proxT    = fbm(fieldUV * 0.28 + vec2(t * 0.05, 0.0)) * 0.4 + fieldDetail * 0.08 + 0.72 + uColorShift * 0.3;
-  float proxMask = hitDist > 0.0 ? 0.56 : smoothstep(0.08, 0.88, proxGlow) * edgeEnergy;
-  col += palette(proxT + 0.15) * proxGlow * proxMask * (0.038 + uCoreEnergy * 0.085 + edgeEnergy * 0.050);
+  float proxMask = hitDist > 0.0 ? 0.50 : smoothstep(0.02, 0.92, proxGlow) * (0.22 + audioAtmosphere * 0.20);
+  col += palette(proxT + 0.15) * proxGlow * proxMask * (0.035 + uCoreEnergy * 0.070 + audioAtmosphere * 0.018);
 
   // Secondary procedural texture, gated by flux so transients reveal detail
   // without flashing the whole frame.
@@ -531,7 +551,7 @@ void main() {
   );
   float procN = 0.5 + 0.5 * noise(fieldUV * (0.85 + cent * 1.25) + procFlow * 0.42 + vec2(tBase * 0.05, -tBase * 0.04));
   float procMask = smoothstep(0.38, 0.82, procN);
-  float localMask = hitDist > 0.0 ? 0.62 : smoothstep(0.18, 0.72, proxGlow);
+  float localMask = hitDist > 0.0 ? 0.62 * (1.0 - silhouetteSoft * 0.46) : smoothstep(0.08, 0.82, proxGlow);
   float procStrength = (0.020 + fluxLift * 0.12 + uTreblePulse * 0.018 + uAudioDetail * 0.016 + uAudioTurbulence * 0.022)
                      * uProcIntensity * localMask * (0.42 + uSurfaceEnergy * 0.50);
   col += palette(procN * 0.22 + cent * 0.18 + uPalettePhase * 0.12 + 0.58) * procMask * procStrength;
@@ -548,7 +568,8 @@ void main() {
     float filamentMix = clamp(0.30 + modeCollapse * 0.34 + modeOrbit * 0.18 + uAudioDetail * 0.22, 0.0, 0.82);
     filLine = mix(filLine, trapLine, filamentMix);
     float filT    = filN * 0.3 + uEnergy * 0.4 + uColorShift * 0.2 + uAudioBrightness * 0.08;
-    col += palette(filT) * filLine * energyMask * (0.27 + uAudioDetail * 0.18);
+    float filamentSilhouetteMask = hitDist > 0.0 ? (1.0 - silhouetteSoft * 0.68) : 1.0;
+    col += palette(filT) * filLine * energyMask * (0.27 + uAudioDetail * 0.18) * filamentSilhouetteMask;
   }
 
   // ── Force-energy brightness: forces locally amplify field brightness ────────

@@ -32,18 +32,22 @@ void main() {
   prev.rgb *= brightFade;
 
   float edgeDelta = length(current.rgb - prev.rgb);
-  float edge = smoothstep(0.090, 0.42, edgeDelta);
+  float edge = smoothstep(0.070, 0.56, edgeDelta);
+  float hardEdge = smoothstep(0.22, 0.58, edgeDelta);
   float trailEdgeEnergy = smoothstep(0.16, 0.64, uEnergy + uOnset * 0.60 + uTreblePulse * 0.35 + uAudioDetail * 0.20);
-  float orphanTrail = smoothstep(0.018, 0.16, prevLuma) * (1.0 - smoothstep(0.012, 0.10, currentLuma)) * (1.0 - trailEdgeEnergy);
-  float chromaEnergy = clamp(uAudioDetail * 0.32 + uAudioTurbulence * 0.44 + uTreblePulse * 0.30, 0.0, 1.0) * trailEdgeEnergy;
+  float orphanTrail = smoothstep(0.018, 0.16, prevLuma) * (1.0 - smoothstep(0.012, 0.10, currentLuma)) * (0.74 + trailEdgeEnergy * 0.26);
+  float chromaEnergy = clamp(uAudioDetail * 0.18 + uAudioTurbulence * 0.24 + uTreblePulse * 0.14, 0.0, 1.0) * (0.20 + trailEdgeEnergy * 0.30);
+  float shearMask = smoothstep(0.04, 0.36, edgeDelta) * (1.0 - hardEdge * 0.86);
   float shearPhase = sin((center.x - center.y) * 13.0 + uBeatPhase * 6.28318 + swirl * 0.35);
   vec3 shear = vec3(prev.g - prev.b, prev.b - prev.r, prev.r - prev.g);
-  prev.rgb *= mix(1.0, 0.34, orphanTrail);
-  prev.rgb *= mix(1.0, 0.78, edge * (0.22 + trailEdgeEnergy * 0.58 + uOnset * 0.18));
-  prev.rgb += shear * edge * chromaEnergy * shearPhase * 0.026;
+  prev.rgb *= mix(1.0, 0.24, orphanTrail);
+  prev.rgb *= mix(1.0, 0.48, hardEdge * (0.58 + trailEdgeEnergy * 0.28 + uOnset * 0.14));
+  prev.rgb *= mix(1.0, 0.76, edge * (0.28 + trailEdgeEnergy * 0.22));
+  prev.rgb += shear * shearMask * chromaEnergy * shearPhase * 0.010;
 
-  float localDecay = uDecay * mix(1.0, 0.64, edge * (0.65 + trailEdgeEnergy * 0.20));
-  localDecay *= mix(1.0, 0.38, orphanTrail);
+  float localDecay = uDecay * mix(1.0, 0.50, edge * (0.58 + trailEdgeEnergy * 0.20));
+  localDecay *= mix(1.0, 0.22, hardEdge * (0.72 + trailEdgeEnergy * 0.20));
+  localDecay *= mix(1.0, 0.30, orphanTrail);
   vec4 mixed = mix(current, prev, localDecay);
   mixed.rgb += current.rgb * uOnset * 0.035 * (1.0 - smoothstep(0.0, 0.8, r2));
   gl_FragColor = vec4(clamp(mixed.rgb, 0.0, 1.0), 1.0);
