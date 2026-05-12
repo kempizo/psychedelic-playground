@@ -88,13 +88,14 @@ export class BehavioralController {
     }
   }
 
-  _computeDrift() {
+  _computeDrift(silenceAmount = 0) {
     const t = this.driftT
+    const calmScale = 1 - Math.min(1, Math.max(0, silenceAmount)) * 0.62
     // Fast micro-drift (existing): subtle per-frame variation
     const fast = {
-      speed:     Math.sin(t * 0.031)         * 0.06,
-      chaos:     Math.sin(t * 0.019 + 1.71)  * 0.05,
-      intensity: Math.sin(t * 0.023 + 3.20)  * 0.04,
+      speed:     Math.sin(t * 0.031)         * 0.06 * calmScale,
+      chaos:     Math.sin(t * 0.019 + 1.71)  * 0.05 * calmScale,
+      intensity: Math.sin(t * 0.023 + 3.20)  * 0.04 * (0.45 + calmScale * 0.55),
     }
     // Slow LFOs: 37s, 71s, 113s — relatively prime, never repeat the same pattern
     const lt = this.lfoT
@@ -104,8 +105,8 @@ export class BehavioralController {
     return {
       speed:       fast.speed,
       intensity:   fast.intensity,
-      chaos:       fast.chaos + lfo37  * 0.12,   // macro warp breathes over 37s
-      paletteDrift: lfo71  * 0.15,                // hue bias wanders over 71s
+      chaos:       fast.chaos + lfo37  * 0.12 * (0.35 + calmScale * 0.65), // macro warp breathes over 37s
+      paletteDrift: lfo71  * 0.15 * (0.45 + calmScale * 0.55),             // hue bias wanders over 71s
       forceBias:   lfo113,                         // -1→1: pull vs push bias over 113s
     }
   }
@@ -191,8 +192,15 @@ export class BehavioralController {
     }
 
     if (this.silenceTimer > 2) {
-      this.state      = 'calm'
-      this.stateTimer = 0
+      if (this.state !== 'calm') {
+        this.prevState = this.state
+        this.prevTargets = { ...STATE_TARGETS[this.state] }
+        this.state = 'calm'
+        this.stateTimer = 0
+        this.stateBlend = 0
+      } else {
+        this.stateTimer += dt
+      }
       this.userIdleTimer = Math.max(this.userIdleTimer, 8)
     } else {
       this._updateState(dt)
@@ -217,7 +225,8 @@ export class BehavioralController {
       intensity:  prevTgt.intensity  + (newTgt.intensity  - prevTgt.intensity)  * this.stateBlend,
       trailDecay: prevTgt.trailDecay + (newTgt.trailDecay - prevTgt.trailDecay) * this.stateBlend,
     }
-    const drift = this._computeDrift()
+    const silenceAmount = Math.max(audioData.silence ?? 0, Math.min(this.silenceTimer / 2.5, 1))
+    const drift = this._computeDrift(silenceAmount)
 
     const lerpRate = 0.012
     this.targets.speed     += (blendedTgt.speed     + drift.speed     - this.targets.speed)     * lerpRate

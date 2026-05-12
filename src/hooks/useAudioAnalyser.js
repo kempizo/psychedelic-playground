@@ -40,6 +40,11 @@ export function useAudioAnalyser() {
     mid: 0.05,
     treble: 0.05,
   })
+  const silenceState = useRef({
+    quietTime: 0,
+    liveTime: 0,
+    isSilent: true,
+  })
   const scratchRef = useRef(null)
   const waveformRef = useRef(null)
   const previousFftRef = useRef(null)
@@ -47,6 +52,10 @@ export function useAudioAnalyser() {
   useEffect(() => {
     const SILENCE_FLOOR = 0.006
     const SILENCE_GATE = 0.018
+    const SILENCE_ENTER_ENERGY = 0.016
+    const SILENCE_EXIT_ENERGY = 0.030
+    const SILENCE_ENTER_TIME = 0.22
+    const SILENCE_EXIT_TIME = 0.05
 
     // Fast attack, measured release — captures transients without silence jitter.
     function ema(prev, next, aAtk, aRel) {
@@ -112,6 +121,29 @@ export function useAudioAnalyser() {
           s.highMid * 0.04 +
           s.treble * 0.02
         )
+        const silence = silenceState.current
+        const quietCandidate = raw.silence && energy < SILENCE_ENTER_ENERGY && s.rms < 0.014
+        const liveCandidate = energy > SILENCE_EXIT_ENERGY || s.rms > 0.022
+        silence.quietTime = quietCandidate
+          ? silence.quietTime + dt
+          : Math.max(0, silence.quietTime - dt * 1.5)
+        silence.liveTime = liveCandidate
+          ? silence.liveTime + dt
+          : Math.max(0, silence.liveTime - dt * 2.0)
+        if (!silence.isSilent && silence.quietTime > SILENCE_ENTER_TIME) {
+          silence.isSilent = true
+          silence.liveTime = 0
+        } else if (silence.isSilent && silence.liveTime > SILENCE_EXIT_TIME) {
+          silence.isSilent = false
+          silence.quietTime = 0
+        }
+
+        const silenceTarget = silence.isSilent ? 1 : 0
+        s.silence = ema(s.silence, silenceTarget, 0.20, 0.48)
+        const quietDamp = energy < 0.024
+          ? 1 - Math.min(0.92, s.silence * 0.92)
+          : 1
+
         const attack = 1 - Math.exp(-dt / 0.025)
         const release = 1 - Math.exp(-dt / 0.42)
         s.energyEnvelope += (energy - s.energyEnvelope) * (energy > s.energyEnvelope ? attack : release)
@@ -119,9 +151,9 @@ export function useAudioAnalyser() {
         const bassPulseRaw = Math.max(0, (s.bass - a.bass * 1.16) / Math.max(a.bass, 0.025))
         const midPulseRaw = Math.max(0, ((s.lowMid * 0.4 + s.mid * 0.6) - a.mid * 1.12) / Math.max(a.mid, 0.025))
         const treblePulseRaw = Math.max(0, ((s.highMid * 0.45 + s.treble * 0.55) - a.treble * 1.10) / Math.max(a.treble, 0.025))
-        s.bassPulse = ema(s.bassPulse, Math.min(1, bassPulseRaw * 0.65), 0.86, 0.18)
-        s.midPulse = ema(s.midPulse, Math.min(1, midPulseRaw * 0.55), 0.78, 0.18)
-        s.treblePulse = ema(s.treblePulse, Math.min(1, treblePulseRaw * 0.45), 0.90, 0.25)
+        s.bassPulse = ema(s.bassPulse, Math.min(1, bassPulseRaw * 0.65) * quietDamp, 0.86, 0.18)
+        s.midPulse = ema(s.midPulse, Math.min(1, midPulseRaw * 0.55) * quietDamp, 0.78, 0.18)
+        s.treblePulse = ema(s.treblePulse, Math.min(1, treblePulseRaw * 0.45) * quietDamp, 0.90, 0.25)
 
         const onsetRaw = Math.max(0, energy - b.lastEnergy)
         const onset = Math.max(0, Math.min(1,
@@ -129,7 +161,7 @@ export function useAudioAnalyser() {
           s.spectralFlux * 0.55 +
           s.bassPulse * 0.35 +
           s.treblePulse * 0.18
-        ))
+        )) * quietDamp
         s.onset = ema(s.onset, onset, 0.75, 0.22)
 
         const minBeatGap = 0.24
@@ -160,7 +192,7 @@ export function useAudioAnalyser() {
           : 0
         s.beatConfidence = b.confidence
         s.energy = energy
-        s.silence = ema(s.silence, raw.silence && energy < 0.018 ? 1 : 0, 0.20, 0.35)
+        s.spectralFlux *= quietDamp
         b.lastEnergy = energy
 
         // Write directly — bypasses React re-render

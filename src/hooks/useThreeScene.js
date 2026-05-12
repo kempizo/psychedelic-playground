@@ -682,13 +682,19 @@ export function useThreeScene(canvasRef) {
       const centroid = clamp01(audioData.spectralCentroid ?? 0)
       const flux = clamp01(audioData.spectralFlux ?? 0)
       const silenceGate = 1 - silence * 0.58
+      const silenceHold = smoothstep05(silence, 0.55, 0.95)
+      const idleBreath = silenceHold * (0.5 + 0.5 * Math.sin(elapsed * 0.56 + Math.sin(elapsed * 0.17) * 0.65))
+      const idleBodyFloor = silenceHold * smoothed.intensity * (0.018 + idleBreath * 0.020)
+      const idleCoreFloor = silenceHold * (0.026 + idleBreath * 0.024)
+      const idleBrightnessFloor = silenceHold * smoothed.intensity * (0.012 + idleBreath * 0.012)
+      const idleMotionGate = 1 - silenceHold * 0.42
 
       const audioTargets = {
-        body: clamp01((subNL * 0.28 + bassNL * 0.46 + lowMidNL * 0.22 + bassPulse * 0.12) * smoothed.intensity * silenceGate),
+        body: Math.max(idleBodyFloor, clamp01((subNL * 0.28 + bassNL * 0.46 + lowMidNL * 0.22 + bassPulse * 0.12) * smoothed.intensity * silenceGate)),
         morph: clamp01((lowMidNL * 0.28 + midNL * 0.42 + highMidNL * 0.20 + midPulse * 0.16) * smoothed.intensity * silenceGate),
         detail: clamp01((highMidNL * 0.28 + trebleNL * 0.42 + hiNL * 0.20 + treblePulse * 0.16) * smoothed.intensity * silenceGate),
         pulse: clamp01((bassPulse * 0.42 + onset * 0.34 + midPulse * 0.18 + beatPulse * 0.16) * (1 - silence * 0.35)),
-        brightness: clamp01((centroid * 0.30 + rms * 0.34 + predictedEnergy * 0.18 + trebleNL * 0.12 + smoothed.intensity * 0.08) * (1 - silence * 0.42)),
+        brightness: Math.max(idleBrightnessFloor, clamp01((centroid * 0.30 + rms * 0.34 + predictedEnergy * 0.18 + trebleNL * 0.12 + smoothed.intensity * 0.08) * (1 - silence * 0.42))),
         turbulence: clamp01((flux * 0.42 + midPulse * 0.24 + treblePulse * 0.26 + onset * 0.12) * (1 - silence * 0.50)),
       }
       const smoothAudio = (key, target, attackTau, releaseTau) => {
@@ -703,9 +709,9 @@ export function useThreeScene(canvasRef) {
       smoothAudio('audioBrightness', audioTargets.brightness, 0.12, 0.50)
       smoothAudio('audioTurbulence', audioTargets.turbulence, 0.06, 0.28)
 
-      const coreTarget = Math.min(1, predictedEnergy * 0.58 + rms * 0.16 + subNL * 0.18 + bassNL * 0.18 + bassPulse * 0.14 + beatPulse * 0.10)
+      const coreTarget = Math.max(idleCoreFloor, Math.min(1, predictedEnergy * 0.58 + rms * 0.16 + subNL * 0.18 + bassNL * 0.18 + bassPulse * 0.14 + beatPulse * 0.10))
       const surfaceTarget = Math.min(1, lowMidNL * 0.22 + midNL * 0.36 + highMidNL * 0.16 + onset * 0.14 + predictedEnergy * 0.16 + midPulse * 0.14)
-      const particleTarget = Math.min(1, predictedEnergy * 0.46 + highMidNL * 0.16 + trebleNL * 0.18 + treblePulse * 0.18 + beatPulse * 0.24)
+      const particleTarget = Math.min(1, predictedEnergy * 0.46 + highMidNL * 0.16 + trebleNL * 0.18 + treblePulse * 0.18 + beatPulse * 0.24) * idleMotionGate
       visualState.coreEnergy += (coreTarget - visualState.coreEnergy) * (1 - Math.exp(-dt / (coreTarget > visualState.coreEnergy ? 0.09 : 0.85)))
       visualState.surfaceEnergy += (surfaceTarget - visualState.surfaceEnergy) * (1 - Math.exp(-dt / (surfaceTarget > visualState.surfaceEnergy ? 0.16 : 0.45)))
       visualState.particleEnergy += (particleTarget - visualState.particleEnergy) * (1 - Math.exp(-dt / 0.32))
@@ -900,7 +906,7 @@ export function useThreeScene(canvasRef) {
       // Particle atmosphere follows delayed predicted energy instead of raw treble spikes.
       const hiVal = Math.min(1, visualState.particleEnergy * smoothed.intensity)
       const density = Math.max(0, smoothed.particleDensity)
-      const livingGate = 1 - silence * 0.42
+      const livingGate = (1 - silence * 0.42) * idleMotionGate
       const spawnRate = hiVal * (1.5 + beatConfidence * 1.8 + visualState.audioDetail * 0.9) * density * livingGate
       if (density > 0.01 && hiVal > lastHi * 0.94 && hiVal > 0.12 && livingGate > 0.22) {
         const wholeSpawns = Math.floor(spawnRate)
@@ -914,10 +920,11 @@ export function useThreeScene(canvasRef) {
       lastHi = hiVal
 
       // Ambient idle dust (1 particle/sec max) — keeps life visible at silence
-      if (density > 0.05 && bOut.state === 'calm' && Math.random() < dt * Math.min(0.9, 0.15 + density * 0.55) * (0.55 + livingGate * 0.45)) {
+      if (density > 0.05 && bOut.state === 'calm' && Math.random() < dt * Math.min(0.9, 0.15 + density * 0.55) * (0.55 + livingGate * 0.45) * idleMotionGate) {
+        const idleDustVelocity = 0.0007 + livingGate * 0.0010
         spawnParticle(
           Math.random() * 2 - 1, Math.random() * 2 - 1,
-          (Math.random() - 0.5) * 0.002, (Math.random() - 0.5) * 0.002,
+          (Math.random() - 0.5) * idleDustVelocity, (Math.random() - 0.5) * idleDustVelocity,
           3.0 + Math.random() * 2.0, 0, 0.3 + Math.random() * 0.3)
       }
 
