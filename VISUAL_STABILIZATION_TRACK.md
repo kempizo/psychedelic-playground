@@ -316,6 +316,49 @@ Visual verification:
 - Intensity changes affect blob, glow, trail, and particles coherently.
 - Energy UI matches visible behavior.
 
+## Stabilization Pass SX - Random Impulse / Temporal Trail Stability
+
+Likely touched:
+
+- `src/hooks/useThreeScene.js`
+- `src/shaders/trail.frag`
+- `src/behaviors/BehavioralController.js`
+
+Exact areas to inspect:
+
+- direct canvas pointer handlers
+- force/pulse call sites
+- idle and auto-blend pulse behavior
+- audio-triggered force/distortion mapping
+- trail decay and mode-transition buffer behavior
+- trail drift, edge fade, orphan trail, and chroma shear
+
+Implementation approach:
+
+- Treat SX as a standalone bug-fix/stability pass, not part of S0-S6 or visual expansion.
+- Keep strong localized force events limited to intentional direct canvas pointer interaction.
+- Convert audio and state-machine disturbances into soft centered breathing pressure, or disable random-position auto pulses.
+- Ensure UI clicks and slider drags cannot start canvas pointer interaction.
+- During mode changes, lower trail persistence and briefly clear existing ping-pong trail buffers instead of preserving incompatible old frames.
+- Tune the existing trail shader so drift, edge fade, orphan-frame fade, and chroma shear blend smoothly.
+- Do not add public controls, URL keys, render passes, render targets, mode IDs, or shader contract changes.
+
+Risks:
+
+- Over-softening audio force response.
+- Making mode changes feel too dry if the trail clears too aggressively.
+- Breaking touch/pointer capture if interaction gating is too broad.
+- Reducing too much chroma shear and losing atmosphere.
+
+Visual verification:
+
+- Silent idle produces no random click-like impulse.
+- Direct canvas click/drag still produces intentional distortion.
+- UI controls do not trigger canvas distortion.
+- Bass/onset response reads as broad breathing, not a click ripple.
+- Rapid mode switches do not preserve incompatible old frames too strongly.
+- Trail feedback remains atmospheric, smooth, and correctly layered before particles.
+
 ## Stabilization Pass X1 - Future Visual Expansion Research
 
 Likely touched:
@@ -374,6 +417,7 @@ For each future implementation pass:
 
 | Date | Change |
 |---|---|
+| 2026-05-12 | ✅ Stabilization Pass SX separated direct canvas interaction forces from audio/idle disturbances, disabled random auto pulses, lowered mode-transition trail persistence with existing-buffer clears, and softened trail drift/edge/chroma feedback without changing render order, controls, uniforms, URLs, presets, mode IDs, particles, or visual expansion scope. |
 | 2026-05-12 | ✅ Stabilization Pass S1.4 smoothed rough blob edges by reducing high-frequency silhouette displacement, softening grazing-surface contrast, and preventing trail hard-edge accumulation without changing render order, controls, uniforms, URLs, presets, particles, or broader visual direction. |
 | 2026-05-12 | ✅ Stabilization Pass S1.3 removed the remaining active-audio silhouette border while preserving fog/smoke/haze and without changing render order, controls, uniforms, URLs, presets, particles, or broader visual direction. |
 | 2026-05-12 | ✅ Stabilization Pass S1.2 removed the calm-mode blob border by calm-gating outer edge glow, replacing rim contrast with soft surface fill, broadening proximity haze, and reducing trail silhouette stacking without changing render order, controls, uniforms, URLs, presets, or particles. |

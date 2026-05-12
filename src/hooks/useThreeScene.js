@@ -298,9 +298,18 @@ export function useThreeScene(canvasRef) {
       f.velX = vx; f.velY = vy
     }
 
-    // Legacy alias so gesture/behavioral call sites keep working during transition
-    const spawnPulse = (x, y, energy) => {
-      spawnForce(x, y, energy, 1, 0.35, 0.6, mouseDirSmooth.x * 0.05, mouseDirSmooth.y * 0.05)
+    const spawnInteractionForce = (x, y, strength, sign = 1, radius = 0.35, tau = 0.6, vx = 0, vy = 0) => {
+      spawnForce(x, y, strength, sign, radius, tau, vx, vy)
+    }
+
+    const spawnAudioBreath = (x, y, energy, sign = 1) => {
+      spawnForce(x, y, energy, sign, 0.72, 0.85)
+    }
+
+    // Gesture discoveries remain interaction-driven, but use a softer force than
+    // direct pointer clicks so they do not read as accidental click ripples.
+    const spawnGestureForce = (x, y, energy) => {
+      spawnForce(x, y, energy * 0.68, 1, 0.46, 0.45, mouseDirSmooth.x * 0.03, mouseDirSmooth.y * 0.03)
     }
 
     // type: 0=dust, 1=spark, 2=droplet
@@ -322,6 +331,7 @@ export function useThreeScene(canvasRef) {
 
     const onPointerDown = (e) => {
       if (!e.isPrimary) return
+      if (e.target !== canvasRef.current) return
       e.preventDefault()
       activePointerId = e.pointerId
       canvasRef.current.setPointerCapture?.(e.pointerId)
@@ -331,7 +341,7 @@ export function useThreeScene(canvasRef) {
       pushClickTime(performance.now())
       // Shift+click = pull (inward warp), normal click = push (outward)
       const sign = e.shiftKey ? -1 : 1
-      spawnForce(x, y, 0.9, sign, 0.35, 0.6, mouseDirSmooth.x * 0.05, mouseDirSmooth.y * 0.05)
+      spawnInteractionForce(x, y, 0.9, sign, 0.35, 0.6, mouseDirSmooth.x * 0.05, mouseDirSmooth.y * 0.05)
       controller.injectEnergy(0.05)
       isHolding = true
       rawMouse.x = x
@@ -378,6 +388,7 @@ export function useThreeScene(canvasRef) {
     let modeTransitionHoldUntil = -999
     let smoothPaletteFamily = prevMode >= 2 ? 1 : 0
     let smoothTrailDecay = 0.84
+    let pendingTrailClearFrames = 0
     const visualState = {
       coreEnergy: 0,
       surfaceEnergy: 0,
@@ -517,9 +528,12 @@ export function useThreeScene(canvasRef) {
       const store = useStore.getState()
       const { audioData, speed, intensity, colorShift, chaos, mode, trailDecay, cameraDistance, procIntensity, particleDensity } = store
       if (mode !== prevMode) {
+        const prevFamily = prevMode >= 2
+        const nextFamily = mode >= 2
         particleBlendFromMode = prevMode
         modeTransitionTarget = 0
         modeTransitionHoldUntil = elapsed + 0.12
+        pendingTrailClearFrames = prevFamily !== nextFamily ? 2 : 1
         prevMode = mode
       }
       if (modeTransitionTarget === 0 && elapsed >= modeTransitionHoldUntil) {
@@ -553,13 +567,11 @@ export function useThreeScene(canvasRef) {
       smoothed.colorShift += (bOut.colorShift - smoothed.colorShift) * lerpCtrl
       smoothed.chaos      += (bOut.chaos      - smoothed.chaos)      * lerpCtrl
 
-      // Bass auto-spawn: rising edge with 0.3s cooldown → push force at blob center
+      // Bass auto-breath: broad centered pressure, separate from click/drag ripples.
       const curBass = audioData.bass
       if (curBass > lastBass * 1.3 && curBass > 0.35 && (elapsed - lastBassSpawn) > 0.3) {
-        const energy = Math.min(curBass * smoothed.intensity, 0.9)
-        const jx = (Math.random() - 0.5) * 0.1 + mouseDirSmooth.x * 0.08
-        const jy = (Math.random() - 0.5) * 0.1 + mouseDirSmooth.y * 0.08
-        spawnForce(jx, jy, energy, 1, 0.40, 0.5)
+        const energy = Math.min(curBass * smoothed.intensity * 0.24, 0.26)
+        spawnAudioBreath(0, 0, energy)
         lastBassSpawn = elapsed
         controller.injectEnergy(0.03)
       }
@@ -569,7 +581,7 @@ export function useThreeScene(canvasRef) {
       if (isHolding && (elapsed - holdStartTime) > 0.15 && (elapsed - lastHoldSpawn) > 0.05) {
         const vx = rawMouse.x - prevRawMouse.x
         const vy = rawMouse.y - prevRawMouse.y
-        spawnForce(rawMouse.x, rawMouse.y, 0.25, 1, 0.22, 0.12, vx * 0.3, vy * 0.3)
+        spawnInteractionForce(rawMouse.x, rawMouse.y, 0.25, 1, 0.22, 0.12, vx * 0.3, vy * 0.3)
         lastHoldSpawn = elapsed
       }
 
@@ -592,20 +604,17 @@ export function useThreeScene(canvasRef) {
       if (isBreak) {
         breakEventPulseTimer = elapsed
         mainUniforms.uColorSpike.value = Math.min(1.0, mainUniforms.uColorSpike.value + 1.0)
-        mainUniforms.uDistortionSpike.value = Math.min(1.2, mainUniforms.uDistortionSpike.value + 1.2)
-        // 3 staggered pulses: direct, +80ms, +160ms — one buildup arc, not three events
-        spawnPulse((Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6, 0.8, 0.65, 'chain', 0)
-        setTimeout(() => spawnPulse((Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6, 0.65, 0.55, 'chain', 0), 80)
-        setTimeout(() => spawnPulse((Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6, 0.5, 0.45, 'chain', 0), 160)
+        mainUniforms.uDistortionSpike.value = Math.min(0.65, mainUniforms.uDistortionSpike.value + 0.45)
+        spawnAudioBreath(0, 0, 0.18)
       }
       prevBehavioralState = bOut.state
 
-      // Auto-mode: virtual pulses from behavioral controller
-      // forceBias < 0 biases toward pull forces (LFO-driven over 113s)
+      // Auto-mode virtual pulses are deliberately broad/centered so idle drift
+      // cannot create click-like random impulse events.
       if (bOut.virtualPulse) {
         const vp = bOut.virtualPulse
         const vpSign = (bOut.forceBias ?? 0) < -0.5 ? -1 : 1
-        spawnForce(vp.x, vp.y, vp.energy, vpSign, 0.35, 0.6)
+        spawnAudioBreath(0, 0, Math.min(vp.energy * 0.18, 0.16), vpSign)
       }
 
       // Mouse velocity: accumulate movement, decay 0.92/frame
@@ -708,9 +717,9 @@ export function useThreeScene(canvasRef) {
       smoothMidHi   += ((midNL * 0.55 + highMidNL * 0.45) * hiNL - smoothMidHi)  * crossLerp
       smoothBassHi  += (bassNL * (highMidNL * 0.45 + trebleNL * 0.55) - smoothBassHi)  * crossLerp
 
-      // bass+hi spike → inject a center force (kick + cymbal "pop")
+      // bass+hi spike → broad center pressure, not a localized click ripple.
       if (smoothBassHi > 0.35 && (elapsed - lastBassSpawn) > 0.4) {
-        spawnForce(0, 0, smoothBassHi * 0.6, 1, 0.5, 0.4)
+        spawnAudioBreath(0, 0, Math.min(smoothBassHi * 0.18, 0.18))
         lastBassSpawn = elapsed
       }
 
@@ -810,8 +819,8 @@ export function useThreeScene(canvasRef) {
         smoothed.breakSpike
       )
 
-      // Combined bass+hi boost: kick + cymbal together trigger distortion pulses
-      const combinedBoost = bassNL * hiNL * smoothed.intensity * 2.5
+      // Combined bass+hi boost: capped shimmer, not a click-like distortion pop.
+      const combinedBoost = Math.min(0.38, bassNL * hiNL * smoothed.intensity * 0.85)
       mainUniforms.uDistortionSpike.value = Math.max(
         mainUniforms.uDistortionSpike.value,
         combinedBoost
@@ -822,10 +831,11 @@ export function useThreeScene(canvasRef) {
       const modeDecay = modeDecayDefaults[mode] ?? 0.84
       const userDecayOffset = trailDecay - 0.84
       const baseDecay = Math.max(0.70, Math.min(0.94, (bOut.trailDecay ?? modeDecay) + userDecayOffset))
-      const minDecay  = baseDecay - 0.04
-      const transitionHold = (1 - modeTransition) * 0.12
-      const targetDecay = Math.min(0.94, Math.max(minDecay, baseDecay - mainUniforms.uBass.value * 0.04) + transitionHold)
-      const trailTau = transitionHold > 0.01 ? 0.12 : 0.22
+      const minDecay = Math.max(0.68, baseDecay - 0.06)
+      const transitionClear = (1 - modeTransition) * 0.16
+      const bassClear = mainUniforms.uBass.value * 0.035
+      const targetDecay = Math.max(0.68, Math.min(0.94, Math.max(minDecay, baseDecay - bassClear - transitionClear)))
+      const trailTau = transitionClear > 0.01 ? 0.08 : 0.24
       smoothTrailDecay += (targetDecay - smoothTrailDecay) * (1 - Math.exp(-dt / trailTau))
       trailUniforms.uDecay.value = smoothTrailDecay
       trailUniforms.uEnergy.value = visualState.particleEnergy
@@ -836,6 +846,17 @@ export function useThreeScene(canvasRef) {
       trailUniforms.uAudioDetail.value = visualState.audioDetail
       trailUniforms.uAudioTurbulence.value = visualState.audioTurbulence
       trailUniforms.uTreblePulse.value = treblePulse
+
+      if (pendingTrailClearFrames > 0) {
+        trailUniforms.uCurrent.value = null
+        trailUniforms.uPrev.value = null
+        finalUniforms.uCurrent.value = null
+        renderer.setRenderTarget(trailRead)
+        renderer.clear()
+        renderer.setRenderTarget(trailWrite)
+        renderer.clear()
+        pendingTrailClearFrames--
+      }
 
       // Pass 1: main shader → rtA
       // Clear finalUniforms so Three.js doesn't keep trailWrite's texture bound
@@ -974,7 +995,7 @@ export function useThreeScene(canvasRef) {
           mainUniforms.uDistortionSpike.value = Math.min(1.2, mainUniforms.uDistortionSpike.value + 0.5)
           const angles = [0, Math.PI * 0.66, Math.PI * 1.33]
           angles.forEach((a, i) => setTimeout(() => {
-            spawnPulse(Math.cos(a) * 0.4, Math.sin(a) * 0.4, 0.7, 0.6, 'chain', 0)
+            spawnGestureForce(Math.cos(a) * 0.4, Math.sin(a) * 0.4, 0.7)
           }, i * 60))
           controller.injectEnergy(0.12)
         }
@@ -984,7 +1005,7 @@ export function useThreeScene(canvasRef) {
           // Palette shift spike
           mainUniforms.uColorSpike.value = Math.min(1.0, mainUniforms.uColorSpike.value + 1.0)
           mainUniforms.uPaletteShift.value = Math.min(1.0, mainUniforms.uPaletteShift.value + 0.8)
-          spawnPulse(0, 0, 0.9, 0.5, 'chain', 0)
+          spawnGestureForce(0, 0, 0.9)
           controller.injectEnergy(0.15)
         }
 
@@ -992,9 +1013,9 @@ export function useThreeScene(canvasRef) {
           addDiscovery('rapidClick')
           // Distortion storm: 5 rapid pulses from center
           for (let k = 0; k < 5; k++) {
-            setTimeout(() => spawnPulse(
+            setTimeout(() => spawnGestureForce(
               (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.2,
-              0.75, 0.8, 'click', 0
+              0.75
             ), k * 40)
           }
           mainUniforms.uDistortionSpike.value = Math.min(1.2, mainUniforms.uDistortionSpike.value + 1.0)

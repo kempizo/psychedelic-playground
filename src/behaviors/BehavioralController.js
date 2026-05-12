@@ -131,16 +131,6 @@ export class BehavioralController {
       if (this.breakEvent.timer >= this.breakEvent.duration) {
         this.breakEvent.active = false
       }
-    } else if (this.state !== 'peak') {
-      if (Math.random() < 0.006 * dt) {
-        this.breakEvent = {
-          active: true,
-          timer: 0,
-          duration: 4 + Math.random() * 6,
-          intensity: 0.4 + Math.random() * 0.5,
-        }
-        this.breakIntensity = 1.0
-      }
     }
   }
 
@@ -240,7 +230,9 @@ export class BehavioralController {
 
     const blend = (user, auto) => user * (1 - autoBlend) + auto * autoBlend
 
-    const virtualPulse = autoBlend > 0.5 ? this._maybeVirtualPulse() : null
+    // SX stability: keep auto-blended drift, but do not emit random force pulses.
+    // Random-position pulses read too much like accidental canvas clicks.
+    const virtualPulse = null
 
     return {
       speed:          blend(userControls.speed,      this.targets.speed),
