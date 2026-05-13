@@ -122,4 +122,8 @@ const useStore = create((set, get) => ({
   },
 }))
 
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
+  window.__STORE__ = useStore
+}
+
 export default useStore

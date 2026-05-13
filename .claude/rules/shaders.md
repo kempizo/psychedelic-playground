@@ -58,13 +58,17 @@ GLSL fails silently on type mismatch. The setup:
 
 When adding a uniform, declare it in BOTH the frag shader AND the `mainUniforms` object in `useThreeScene.js`. The render loop must update it each frame.
 
-## Force field — no rings policy
+## Force field — no rings, growth attractor semantics
 Clicks, drags, bass kicks, and gestures all spawn **forces** (not rings). A force is a Gaussian-falloff field disturbance: `falloff = exp(-d²/r²)`. Forces are invisible by themselves — only their distortion of the FBM domain is visible. Do NOT add visible ring SDFs or overlaid geometric shapes. `uForces` / `uForceMeta` replace the removed `uPulses` / `uPulseExtra` uniforms.
 
-- Positive `strength` → push (warp outward from origin)
-- Negative `strength` → pull (warp inward)
-- `tau` defaults to 0.6s; drag-painting uses short tau ≈ 0.12s
+Forces should read as **the organism leaning toward / away from a point**, not as impact ripples. Default click is an inward growth attractor (low strength, wide radius, long tau). Shift+click releases outward. Drag paints a continuous soft attractor ridge — never an impact storm. Avoid stacking many short pulses to "feel" an event; one wider, longer-tau attractor reads better than five short pops.
+
+- Negative `strength` → pull (warp inward) — used for default clicks and drag (growth attractor)
+- Positive `strength` → push (warp outward) — used for shift+click releases and bass-breath
+- Click defaults: strength ≈ 0.22, radius ≈ 0.55, tau ≈ 1.1s
+- Drag defaults: strength ≈ 0.08, radius ≈ 0.40, tau ≈ 0.12s
 - Spawn via `spawnForce(x, y, strength, sign, radius, tau)` in `useThreeScene.js`
+- Rapid-click gesture fires ONE soft attractor + small `uColorSpike`, not a multi-pulse distortion storm
 
 ## Adding a new shader effect
 1. Add the GLSL code to `psychedelic.frag` — use existing `fbm()`, `noise()`, `palette()` helpers.
@@ -107,6 +111,13 @@ Target 60 fps on M1 / mid-range desktop GPU. Red flags:
 - **Black screen**: usually a precision missing, or `uMode` was passed as float instead of int.
 - **Banding**: increase `b` palette vector slightly, or add a tiny dither in the final pass.
 - **Particles invisible**: check `gl.POINTS` is supported, `gl_PointSize` is at least 1.0, and additive blending is enabled on the material.
+- **Stationary left-side seam / cut blob**: suspect screen-space polar math before lighting or trail feedback. The negative-x `atan(y, x)` branch cut appears on the left side of the canvas, so any non-periodic use of `atan`, `mod`, `abs`, or fractional sector counts can make an invisible fixed line that cuts both blob and background.
+  - Keep radial/mandala sector counts integer before using `sin(angle * sectors)`.
+  - In `kaleidoFold`, compute the folded polar target, then blend Cartesian positions (`mix(p, foldedP, amount)`) instead of interpolating raw polar angles across the branch cut.
+  - Avoid view/Fresnel folds like `abs(dot(nrm, -rd))` unless verified; prefer `clamp(dot(nrm, -rd), 0.0, 1.0)` when the fold creates a surface crease.
+  - For Orbit mode, hard `min(min(d0, d1), d2)` between blob copies can leave planar derivative creases. Use the local `smin` helper and tune the blend width before changing architecture.
+  - If the seam persists under audio peaks, bypass the trail temporarily (`localDecay = 0.0`) to separate feedback ghosts from main-shader cuts, then revert the test line. If bypass does not help, inspect raymarch hit thresholds/step scale and SDF displacement amplitude.
+  - Capture at least Fluid and Orbit, calm and peak, with canvas-only screenshots. UI-overlay screenshots can hide or mimic the defect.
 
 ## Visual iteration loop (execute mode only)
 After any visual change, run this loop before reporting the task done:

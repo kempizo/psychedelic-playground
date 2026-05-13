@@ -99,6 +99,13 @@ export function useThreeScene(canvasRef) {
       uBeatPhase:     { value: 0 },
       uPalettePhase:  { value: 0 },
       uModeBlend:     { value: new THREE.Vector4(0, 0, 0, 0) },
+      uEngineA:        { value: new THREE.Vector4(1, 0, 0, 0) },
+      uEngineB:        { value: new THREE.Vector4(0, 0, 0, 0) },
+      uEngineC:        { value: new THREE.Vector4(0, 0, 0, 0) },
+      uEngineD:        { value: new THREE.Vector4(0, 0, 0, 0) },
+      // Tunnel/portal depth layer (Stage 11) — internal only
+      uTunnelA:        { value: new THREE.Vector4(0, 0, 0, 0) },
+      uTunnelB:        { value: new THREE.Vector4(0, 0, 0, 0) },
       uCameraDistance:{ value: 2.8 },
       uSpectralCentroid: { value: 0 },
       uSpectralFlux: { value: 0 },
@@ -312,7 +319,7 @@ export function useThreeScene(canvasRef) {
       spawnForce(x, y, energy * 0.68, 1, 0.46, 0.45, mouseDirSmooth.x * 0.03, mouseDirSmooth.y * 0.03)
     }
 
-    // type: 0=dust, 1=spark, 2=droplet
+    // type: 0=dust, 1=ember, 2=spore
     const spawnParticle = (px, py, vx, vy, life, type = 1, depth = null) => {
       for (let i = 0; i < MAX_PARTICLES; i++) {
         if (ages[i] < lives[i]) continue
@@ -322,7 +329,7 @@ export function useThreeScene(canvasRef) {
         ages[i]   = 0
         lives[i]  = life
         ptypes[i] = type
-        pdepths[i]= depth !== null ? depth : 0.4 + Math.random() * 0.6
+        pdepths[i]= depth !== null ? clamp01(depth) : 0.4 + Math.random() * 0.6
         velocities[i].x = vx
         velocities[i].y = vy
         break
@@ -347,9 +354,11 @@ export function useThreeScene(canvasRef) {
       const x = rawMouse.x
       const y = rawMouse.y
       pushClickTime(performance.now())
-      // Shift+click = pull (inward warp), normal click = push (outward)
-      const sign = e.shiftKey ? -1 : 1
-      spawnInteractionForce(x, y, 0.9, sign, 0.35, 0.6, mouseDirSmooth.x * 0.05, mouseDirSmooth.y * 0.05)
+      // Default click = soft inward growth attractor (organism leans toward
+      // touch point). Shift+click = outward release. Wider radius + longer
+      // tau than the old impact ripple so it reads as influence, not shock.
+      const sign = e.shiftKey ? 1 : -1
+      spawnInteractionForce(x, y, 0.22, sign, 0.55, 1.1, mouseDirSmooth.x * 0.05, mouseDirSmooth.y * 0.05)
       controller.injectEnergy(0.05)
       isHolding = true
       rawMouse.x = x
@@ -407,6 +416,10 @@ export function useThreeScene(canvasRef) {
     let smoothPaletteFamily = prevMode >= 2 ? 1 : 0
     let smoothTrailDecay = 0.84
     let pendingTrailClearFrames = 0
+    // Slice 6 — Journey phase multipliers. Eased toward target each frame with
+    // tau ≈ 1.2s so phase transitions never thrash. Drive spore density,
+    // portal bloom, tunnel pull, trail decay, and palette heat.
+    const phaseMul = { spore: 0.78, portal: 0.58, tunnelPull: 0.72, trailDecay: 0.86, colorHeat: 0.45 }
     const visualState = {
       coreEnergy: 0,
       surfaceEnergy: 0,
@@ -415,6 +428,15 @@ export function useThreeScene(canvasRef) {
       palettePhase: c0,
       cameraDistance: 2.8,
       modeBlend: new THREE.Vector4(0, 0, 0, 0),
+      engineA: new THREE.Vector4(1, 0, 0, 0),
+      engineB: new THREE.Vector4(0, 0, 0, 0),
+      engineC: new THREE.Vector4(0, 0, 0, 0),
+      engineD: new THREE.Vector4(0, 0, 0, 0),
+      // Stage 11 tunnel/portal: smoothed render-loop-local depth-field controls
+      // A: x=depth, y=inward, z=gills, w=spiral
+      // B: x=breath, y=portalBloom, z=growthWaveAge, w=growthWaveAmp
+      tunnelA: new THREE.Vector4(0, 0, 0, 0),
+      tunnelB: new THREE.Vector4(0, 0, 0, 0),
       audioBody: 0,
       audioMorph: 0,
       audioDetail: 0,
@@ -428,6 +450,12 @@ export function useThreeScene(canvasRef) {
     let smoothBassMid = 0, smoothMidHi = 0, smoothBassHi = 0
     // S6: render-loop-only journey scalar — aligns blob/trail/particles/EnergyIndicator
     const journey = { value: 0, transient: 0 }
+    const growthWave = { age: 1, amp: 0, lastLaunch: -999 }
+    const engineATarget = new THREE.Vector4()
+    const engineBTarget = new THREE.Vector4()
+    const engineCTarget = new THREE.Vector4()
+    const engineDTarget = new THREE.Vector4()
+    const tunnelATarget = new THREE.Vector4()
 
     // Curl noise: divergence-free 2D velocity field from gradient of a scalar noise.
     // Uses finite differences on a smooth hash to approximate ∂n/∂y and -∂n/∂x.
@@ -460,6 +488,14 @@ export function useThreeScene(canvasRef) {
       return t * t * (3 - 2 * t)
     }
     const clamp01 = (v) => Math.max(0, Math.min(1, v))
+    const randRange = (min, max) => min + Math.random() * (max - min)
+    const particleDepth = (stratum, lift = 0) => {
+      const activity = clamp01(lift)
+      if (stratum === 'near') return Math.min(1, randRange(0.76, 0.98) + activity * 0.05)
+      if (stratum === 'far') return Math.max(0.18, randRange(0.22, 0.44) - activity * 0.03)
+      return randRange(0.48, 0.74) + activity * 0.04
+    }
+    const depthScale = (depth) => 0.42 + clamp01(depth) * 0.82
 
     const spawnParticleForMode = (spawnMode, hiVal, depth, silenceValue = 0) => {
       const body = visualState.audioBody
@@ -467,63 +503,103 @@ export function useThreeScene(canvasRef) {
       const detail = visualState.audioDetail
       const pulse = visualState.audioPulse
       const turbulence = visualState.audioTurbulence
-      const quietGate = 1 - silenceValue * 0.35
-      const drift = 0.002 + hiVal * 0.003 + detail * 0.002
+      const quietGate = 1 - silenceValue * 0.72
+      const activity = clamp01(hiVal * 0.45 + detail * 0.26 + pulse * 0.22 + body * 0.12)
+      const drift = 0.0014 + hiVal * 0.0022 + detail * 0.0017
       if (spawnMode === 2) {
-        // Vortex: tangential bloom with mild outward pressure.
+        // Vortex: tangential bloom with mild inward tightening.
         const angle = Math.random() * Math.PI * 2
-        const r = 0.28 + Math.random() * (0.42 + body * 0.16)
-        const tang = 0.0045 + morph * 0.004 + pulse * 0.003
-        const out = 0.0008 + body * 0.0018
-        const tangX = (-Math.sin(angle) * tang + Math.cos(angle) * out) * quietGate
-        const tangY = ( Math.cos(angle) * tang + Math.sin(angle) * out) * quietGate
+        const r = randRange(0.32, 0.78 + body * 0.16)
+        const d = depth ?? particleDepth(Math.random() < 0.68 ? 'mid' : 'near', activity)
+        const parallax = depthScale(d)
+        const tang = (0.0027 + morph * 0.0028 + pulse * 0.0020) * parallax
+        const inward = (0.0007 + body * 0.0012 + turbulence * 0.0006) * parallax
+        const tangX = (-Math.sin(angle) * tang - Math.cos(angle) * inward) * quietGate
+        const tangY = ( Math.cos(angle) * tang - Math.sin(angle) * inward) * quietGate
         spawnParticle(Math.cos(angle) * r, Math.sin(angle) * r,
-          tangX, tangY, 1.35 + Math.random() * 1.45, 1, depth)
+          tangX, tangY, 1.5 + Math.random() * 1.55, Math.random() < 0.46 ? 1 : 2, d)
       } else if (spawnMode === 3) {
-        // Collapse: edge spores drift inward, then release on transients.
+        // Collapse: inward mycelium branches, with controlled onset release.
         const angle = Math.random() * Math.PI * 2
-        const r = 0.62 + Math.random() * 0.36
+        const r = randRange(0.58, 1.02)
         const cx = Math.cos(angle) * r, cy = Math.sin(angle) * r
         const n = Math.sqrt(cx * cx + cy * cy) || 1
-        const inward = 0.0028 + body * 0.0032
-        const release = pulse * 0.004
+        const d = depth ?? particleDepth(Math.random() < 0.72 ? 'mid' : 'near', activity)
+        const parallax = depthScale(d)
+        const inward = (0.0017 + body * 0.0022 + morph * 0.0008) * parallax
+        const release = pulse * 0.0028 * parallax
         spawnParticle(cx, cy, (-cx / n * inward + Math.cos(angle) * release) * quietGate, (-cy / n * inward + Math.sin(angle) * release) * quietGate,
-          1.6 + Math.random() * 1.6, 2, depth)
+          1.75 + Math.random() * 1.8, 2, d)
       } else if (spawnMode === 4) {
-        // Orbit: stable three-lobed seam shimmer.
+        // Orbit: stable seam-biased shimmer without symmetrical orbit spam.
         const seam = Math.floor(Math.random() * 3) * (Math.PI * 2 / 3)
-        const angle = seam + (Math.random() - 0.5) * (0.32 + turbulence * 0.28)
-        const r = 0.23 + Math.random() * (0.17 + morph * 0.08)
-        const tang = 0.0018 + detail * 0.0025
+        const angle = seam + (Math.random() - 0.5) * (0.42 + turbulence * 0.24) + Math.sin(timer.getElapsed() * 0.17 + seam) * 0.12
+        const r = randRange(0.24, 0.46 + morph * 0.08)
+        const d = depth ?? particleDepth(Math.random() < 0.72 ? 'mid' : 'far', activity)
+        const parallax = depthScale(d)
+        const tang = (0.0011 + detail * 0.0018) * parallax
+        const seamDrift = (Math.random() - 0.5) * 0.0008 * parallax
         spawnParticle(Math.cos(angle) * r, Math.sin(angle) * r,
-          (-Math.sin(angle) * tang + (Math.random() - 0.5) * 0.0015) * quietGate,
-          ( Math.cos(angle) * tang + (Math.random() - 0.5) * 0.0015) * quietGate,
-          1.6 + Math.random() * 1.4, 1, depth)
+          (-Math.sin(angle) * tang + Math.cos(seam) * seamDrift) * quietGate,
+          ( Math.cos(angle) * tang + Math.sin(seam) * seamDrift) * quietGate,
+          1.7 + Math.random() * 1.55, Math.random() < 0.56 ? 1 : 0, d)
       } else if (spawnMode === 1) {
         // Radial: mandala arcs that breathe around the center.
         const spoke = Math.floor(Math.random() * 8) * (Math.PI * 2 / 8)
         const angle = spoke + (Math.random() - 0.5) * (0.20 + morph * 0.32)
-        const r = 0.22 + Math.random() * 0.68
-        const breathe = (0.0012 + body * 0.0022 + pulse * 0.0020) * quietGate
-        const tangent = (Math.random() - 0.5) * drift
+        const r = randRange(0.24, 0.92)
+        const d = depth ?? particleDepth(Math.random() < 0.66 ? 'mid' : 'far', activity)
+        const parallax = depthScale(d)
+        const breathe = (0.0009 + body * 0.0018 + pulse * 0.0013) * quietGate * parallax
+        const tangent = (Math.random() - 0.5) * drift * parallax
         spawnParticle(Math.cos(angle) * r, Math.sin(angle) * r,
           (Math.cos(angle) * breathe - Math.sin(angle) * tangent),
           (Math.sin(angle) * breathe + Math.cos(angle) * tangent),
-          1.8 + Math.random() * 1.8, 0, depth)
+          2.0 + Math.random() * 2.1, Math.random() < 0.58 ? 0 : 2, d)
       } else {
-        // Fluid: slow tunnel-rim dust carried by the organic curl field.
+        // Fluid: slow tunnel-rim dust carried by tissue-like curl.
         const angle = Math.random() * Math.PI * 2
-        const r = 0.46 + Math.random() * 0.54
+        const r = randRange(0.48, 1.06)
         const side = Math.random() < 0.5 ? -1 : 1
         const rimX = Math.cos(angle) * r * side
         const rimY = Math.sin(angle) * r
         const curl = curlNoise(rimX * 1.6, rimY * 1.6, timer.getElapsed())
-        const c = 0.0014 + turbulence * 0.0022 + detail * 0.0012
+        const d = depth ?? particleDepth(Math.random() < 0.68 ? 'far' : 'mid', activity)
+        const parallax = depthScale(d)
+        const c = (0.0008 + turbulence * 0.0015 + detail * 0.0009 + morph * 0.0006) * parallax
         spawnParticle(
           rimX, rimY,
-          (curl.x * c + (Math.random() - 0.5) * 0.0015) * quietGate,
-          (curl.y * c + 0.0006 + (Math.random() - 0.5) * 0.0015) * quietGate,
-          2.0 + Math.random() * 2.0, 0, depth)
+          (curl.x * c + (Math.random() - 0.5) * 0.0008 * parallax) * quietGate,
+          (curl.y * c + 0.00035 * parallax + (Math.random() - 0.5) * 0.0008 * parallax) * quietGate,
+          2.4 + Math.random() * 2.3, Math.random() < 0.74 ? 0 : 2, d)
+      }
+    }
+
+    const spawnGrowthWaveSpores = (count, strength, preferredMode, silenceValue = 0) => {
+      const quietGate = 1 - silenceValue * 0.62
+      const safeCount = Math.min(8, Math.max(0, count))
+      for (let s = 0; s < safeCount; s++) {
+        const angle = Math.random() * Math.PI * 2
+        const rim = randRange(0.30, 0.66 + visualState.audioMorph * 0.10)
+        const d = particleDepth(s % 3 === 0 ? 'near' : 'mid', strength)
+        const parallax = depthScale(d)
+        const curl = curlNoise(Math.cos(angle) * 1.4, Math.sin(angle) * 1.4, timer.getElapsed() + s)
+        const outward = (0.0012 + strength * 0.0022 + visualState.audioBody * 0.0008) * parallax * quietGate
+        const tangent = (0.0007 + visualState.audioMorph * 0.0013 + visualState.audioDetail * 0.0010) * parallax * quietGate
+        const type = s % 4 === 0 ? 1 : 2
+        spawnParticle(
+          Math.cos(angle) * rim,
+          Math.sin(angle) * rim,
+          Math.cos(angle) * outward + (-Math.sin(angle) * tangent + curl.x * 0.0007) * quietGate,
+          Math.sin(angle) * outward + ( Math.cos(angle) * tangent + curl.y * 0.0007) * quietGate,
+          randRange(1.15, 2.35),
+          type,
+          d,
+        )
+      }
+
+      if (preferredMode === 2 || preferredMode === 3) {
+        spawnParticleForMode(preferredMode, strength, particleDepth('mid', strength), silenceValue)
       }
     }
 
@@ -608,7 +684,8 @@ export function useThreeScene(canvasRef) {
       if (isHolding && (elapsed - holdStartTime) > 0.15 && (elapsed - lastHoldSpawn) > 0.05) {
         const vx = rawMouse.x - prevRawMouse.x
         const vy = rawMouse.y - prevRawMouse.y
-        spawnInteractionForce(rawMouse.x, rawMouse.y, 0.25, 1, 0.22, 0.12, vx * 0.3, vy * 0.3)
+        // Drag paints a soft growth ridge — inward sign, wide & gentle.
+        spawnInteractionForce(rawMouse.x, rawMouse.y, 0.08, -1, 0.40, 0.12, vx * 0.3, vy * 0.3)
         lastHoldSpawn = elapsed
       }
 
@@ -726,7 +803,9 @@ export function useThreeScene(canvasRef) {
       visualState.surfaceEnergy += (surfaceTarget - visualState.surfaceEnergy) * (1 - Math.exp(-dt / (surfaceTarget > visualState.surfaceEnergy ? 0.16 : 0.45)))
       visualState.particleEnergy += (particleTarget - visualState.particleEnergy) * (1 - Math.exp(-dt / 0.32))
       visualState.beatPhase += (beatPhase - visualState.beatPhase) * (1 - Math.exp(-dt / 0.16))
-      visualState.palettePhase += dt * (0.018 + smoothed.speed * 0.018) + predictedEnergy * dt * 0.035 + smoothed.colorShift * dt * 0.010
+      const afterglowColorSlowdown = bOut.state === 'afterglow' ? 0.48 : 1
+      const colorDriftRate = (0.0045 + smoothed.speed * 0.0035 + predictedEnergy * 0.006 + visualState.audioBrightness * 0.003) * afterglowColorSlowdown
+      visualState.palettePhase += dt * colorDriftRate + smoothed.colorShift * dt * 0.004
 
       const modeTargets = [
         { cameraDistance: 2.8, radial: 0.05, vortex: 0.00, collapse: 0.00, orbit: 0.00 },
@@ -756,7 +835,7 @@ export function useThreeScene(canvasRef) {
       const stFloor = stateFloors[bOut.state] ?? 0.0
       const stCeil  = stateCeils[bOut.state]  ?? 1.0
       const journeyTarget = clamp01(Math.min(stCeil, Math.max(stFloor,
-        controller.energy * 0.38 + predictedEnergy * 0.26 + visualState.audioBody * 0.20 + visualState.audioBrightness * 0.12 + visualState.coreEnergy * 0.04
+        controller.energy * 0.38 + predictedEnergy * 0.26 + visualState.audioBody * 0.10 + visualState.audioBrightness * 0.10 + visualState.coreEnergy * 0.04
       )))
       const journeyTransientTarget = clamp01(visualState.audioPulse * 0.35 + onset * 0.25)
       const journeyAttack   = 1 - Math.exp(-dt / 0.10)
@@ -765,6 +844,123 @@ export function useThreeScene(canvasRef) {
       const journeyTRelease = 1 - Math.exp(-dt / 0.30)
       journey.value     = clamp01(journey.value     + (journeyTarget          - journey.value)     * (journeyTarget          > journey.value     ? journeyAttack  : journeyRelease))
       journey.transient = clamp01(journey.transient + (journeyTransientTarget - journey.transient) * (journeyTransientTarget > journey.transient ? journeyTAttack : journeyTRelease))
+
+      // Slice 6 — Journey phase. Derived from behavioralState + journey scalar
+      // + silence. Phase multipliers ease over tau ≈ 1.2s so the transitions
+      // inherit existing behavioral hysteresis without thrashing.
+      let phase = 'breathing-organism'
+      if (silence > 0.6 && journey.value < 0.18) phase = 'idle-mycelium'
+      else if (bOut.state === 'build') phase = 'gills-portal-pull'
+      else if (bOut.state === 'peak') phase = 'bloom-breakthrough'
+      else if (bOut.state === 'afterglow') phase = 'afterglow'
+      else if (bOut.state === 'calm' && silence < 0.4) phase = 'breathing-organism'
+      const phaseTargets = {
+        'idle-mycelium':      { spore: 0.34, portal: 0.02, tunnelPull: 0.48, trailDecay: 0.91, colorHeat: 0.24 },
+        'breathing-organism': { spore: 0.78, portal: 0.58, tunnelPull: 0.72, trailDecay: 0.86, colorHeat: 0.45 },
+        'gills-portal-pull':  { spore: 0.96, portal: 0.96, tunnelPull: 1.36, trailDecay: 0.80, colorHeat: 0.56 },
+        'bloom-breakthrough': { spore: 1.12, portal: 1.28, tunnelPull: 1.04, trailDecay: 0.74, colorHeat: 0.72 },
+        'afterglow':          { spore: 0.52, portal: 0.24, tunnelPull: 0.42, trailDecay: 0.89, colorHeat: 0.28 },
+      }
+      const pT = phaseTargets[phase]
+      const phaseLerp = 1 - Math.exp(-dt / 1.2)
+      phaseMul.spore      += (pT.spore      - phaseMul.spore)      * phaseLerp
+      phaseMul.portal     += (pT.portal     - phaseMul.portal)     * phaseLerp
+      phaseMul.tunnelPull += (pT.tunnelPull - phaseMul.tunnelPull) * phaseLerp
+      phaseMul.trailDecay += (pT.trailDecay - phaseMul.trailDecay) * phaseLerp
+      phaseMul.colorHeat  += (pT.colorHeat  - phaseMul.colorHeat)  * phaseLerp
+      if (import.meta.env.DEV && typeof window !== 'undefined') {
+        window.__JOURNEY_PHASE__ = phase
+        window.__JOURNEY_PHASE_MUL__ = { ...phaseMul }
+      }
+
+      // Stage 4 engines stay render-loop-local: existing mode IDs select five
+      // smoothed internal behaviors while audio gradually wakes the system.
+      const engineFluid = clamp01(1 - Math.max(visualState.modeBlend.x, visualState.modeBlend.y, visualState.modeBlend.z, visualState.modeBlend.w))
+      const audioPresence = clamp01((1 - silence) * 0.58 + predictedEnergy * 0.20 + rms * 0.16 + visualState.audioBody * 0.18 + visualState.audioBrightness * 0.10)
+      const journeyIntensity = clamp01(journey.value * 0.78 + journey.transient * 0.16 + audioPresence * 0.18)
+      const calmMotion = clamp01((1 - journeyIntensity * 0.58) * (0.38 + silenceHold * 0.50))
+      const onsetAccent = clamp01(audioPresence * (visualState.audioPulse * 0.55 + onset * 0.22 + beatPulse * 0.18))
+      // bloomEnergy is uAudioBrightness's territory per role table; keep
+      // audioBody/Morph as small supports only (≤0.10 each).
+      const bloomEnergy = clamp01((visualState.audioBody * 0.10 + visualState.audioMorph * 0.10 + visualState.audioBrightness * 0.46 + onsetAccent * 0.24) * audioPresence)
+      const warpDepth = clamp01(0.16 + smoothed.chaos * 0.22 + visualState.audioMorph * 0.26 + journeyIntensity * 0.24 + calmMotion * 0.10)
+      const atmosphereDensity = clamp01(0.22 + calmMotion * 0.20 + visualState.audioBrightness * 0.18 + journeyIntensity * 0.22 + smoothed.procIntensity * 0.16)
+      const particleActivity = clamp01(visualState.particleEnergy * 0.72 + visualState.audioDetail * 0.22 + journeyIntensity * 0.16)
+      const trailPersistence = clamp01(smoothTrailDecay * 0.62 + journeyIntensity * 0.22 + calmMotion * 0.10)
+      const surfaceDetail = clamp01(0.16 + smoothed.procIntensity * 0.24 + visualState.audioDetail * 0.28 + visualState.surfaceEnergy * 0.24 + audioPresence * 0.08)
+      const tunnelPull = clamp01((engineFluid * 0.56 + visualState.modeBlend.y * 0.28 + visualState.modeBlend.z * 0.16) * (0.32 + journeyIntensity * 0.42 + calmMotion * 0.18) * phaseMul.tunnelPull)
+      const engineLerp = 1 - Math.exp(-dt / 0.95)
+      engineATarget.set(
+        engineFluid,
+        clamp01(visualState.modeBlend.x),
+        clamp01(visualState.modeBlend.y),
+        clamp01(visualState.modeBlend.z),
+      )
+      engineBTarget.set(
+        clamp01(visualState.modeBlend.w),
+        audioPresence,
+        journeyIntensity,
+        calmMotion,
+      )
+      engineCTarget.set(
+        bloomEnergy,
+        warpDepth,
+        atmosphereDensity,
+        surfaceDetail,
+      )
+      engineDTarget.set(
+        tunnelPull,
+        trailPersistence,
+        particleActivity,
+        onsetAccent,
+      )
+      visualState.engineA.lerp(engineATarget, engineLerp)
+      visualState.engineB.lerp(engineBTarget, engineLerp)
+      visualState.engineC.lerp(engineCTarget, engineLerp)
+      visualState.engineD.lerp(engineDTarget, engineLerp)
+
+      // Stage 11 — tunnel / portal depth controls. All locals stay in render
+      // loop; uTunnelA/B are internal-only shader uniforms (no UI / store / URL).
+      // Smoothing taus mirror engineLerp so the depth field never spikes from a
+      // single raw audio value. Portal bloom is the only fast-attack term and
+      // its amplitude is bounded inside the shader helper.
+      const tunnelIdleFloor = 0.28 + calmMotion * 0.14
+      const phaseDepthLift = Math.max(0, phaseMul.portal - 0.30) * 0.10 + Math.max(0, phaseMul.tunnelPull - 0.72) * 0.06
+      const tunnelDepth  = clamp01(tunnelIdleFloor + audioPresence * 0.55 + journeyIntensity * 0.18 + phaseDepthLift)
+      const tunnelInward = clamp01((bassNL * 0.55 + bassPulse * 0.35 + tunnelPull * 0.20) * phaseMul.tunnelPull)
+      const tunnelGills  = clamp01(midNL * 0.55 + midPulse * 0.25 + visualState.modeBlend.x * 0.60 + visualState.modeBlend.w * 0.20 + Math.max(0, phaseMul.tunnelPull - 0.72) * 0.26)
+      const tunnelSpiral = clamp01(visualState.modeBlend.y * 0.70 + flux * 0.25 + visualState.modeBlend.w * 0.20 + Math.max(0, phaseMul.portal - 0.58) * 0.18)
+      const tunnelBreath = clamp01(subNL * 0.70 + visualState.modeBlend.z * 0.55 + bassPulse * 0.18)
+      const tunnelPortalTarget = clamp01((onsetAccent * audioPresence + bassPulse * audioPresence * 0.45) * phaseMul.portal)
+      tunnelATarget.set(tunnelDepth, tunnelInward, tunnelGills, tunnelSpiral)
+      visualState.tunnelA.lerp(tunnelATarget, engineLerp)
+      const breathLerp = 1 - Math.exp(-dt / 0.40)
+      visualState.tunnelB.x += (tunnelBreath - visualState.tunnelB.x) * breathLerp
+      const portalAttack  = 1 - Math.exp(-dt / 0.04)
+      const portalRelease = 1 - Math.exp(-dt / 0.30)
+      visualState.tunnelB.y = clamp01(
+        visualState.tunnelB.y +
+        (tunnelPortalTarget - visualState.tunnelB.y) *
+        (tunnelPortalTarget > visualState.tunnelB.y ? portalAttack : portalRelease)
+      )
+
+      const growthTrigger = clamp01((onsetAccent * 0.75 + midPulse * 0.36 + bassPulse * 0.22) * audioPresence * phaseMul.portal)
+      let growthWaveReleased = false
+      if (growthTrigger > 0.20 && elapsed - growthWave.lastLaunch > 0.42) {
+        growthWave.age = 0
+        growthWave.amp = Math.max(growthWave.amp, Math.min(1, growthTrigger * 1.12))
+        growthWave.lastLaunch = elapsed
+        growthWaveReleased = true
+      }
+      if (growthWave.amp > 0.0005) {
+        growthWave.age = Math.min(1, growthWave.age + dt * (0.58 + visualState.audioMorph * 0.18 + tunnelInward * 0.14))
+        growthWave.amp *= Math.exp(-dt / (bOut.state === 'afterglow' ? 0.92 : 0.56))
+      } else {
+        growthWave.age = Math.min(1, growthWave.age + dt * 0.70)
+        growthWave.amp = 0
+      }
+      visualState.tunnelB.z = growthWave.age
+      visualState.tunnelB.w = growthWave.amp
 
       // bass+hi spike → broad center pressure, not a localized click ripple.
       if (smoothBassHi > 0.35 && (elapsed - lastBassSpawn) > 0.4) {
@@ -823,6 +1019,12 @@ export function useThreeScene(canvasRef) {
       mainUniforms.uBeatPhase.value = visualState.beatPhase
       mainUniforms.uPalettePhase.value = visualState.palettePhase
       mainUniforms.uModeBlend.value.copy(visualState.modeBlend)
+      mainUniforms.uEngineA.value.copy(visualState.engineA)
+      mainUniforms.uEngineB.value.copy(visualState.engineB)
+      mainUniforms.uEngineC.value.copy(visualState.engineC)
+      mainUniforms.uEngineD.value.copy(visualState.engineD)
+      mainUniforms.uTunnelA.value.copy(visualState.tunnelA)
+      mainUniforms.uTunnelB.value.copy(visualState.tunnelB)
       mainUniforms.uCameraDistance.value = visualState.cameraDistance
       mainUniforms.uSpectralCentroid.value = audioData.spectralCentroid ?? 0
       mainUniforms.uSpectralFlux.value = audioData.spectralFlux ?? 0
@@ -839,9 +1041,13 @@ export function useThreeScene(canvasRef) {
       smoothPaletteFamily += (paletteFamily - smoothPaletteFamily) * (1 - Math.exp(-dt / 0.68))
       mainUniforms.uPaletteFamily.value = paletteFamily
       mainUniforms.uPaletteFamilyBlend.value = smoothPaletteFamily
-      // uPaletteShift: break events push toward pink; slow LFO paletteDrift wanders hue
+      // uPaletteShift: phase heat pushes peak toward magenta/violet while
+      // afterglow/idle cool by damping break heat inside the same palette family.
+      const phaseHeatBias = Math.max(0, phaseMul.colorHeat - 0.45) * 0.11 * audioPresence
       const targetShift = Math.max(0, Math.min(1,
-        smoothstep05(bOut.breakIntensity, 0.5, 1.0) + (bOut.paletteDrift ?? 0) * 0.5
+        smoothstep05(bOut.breakIntensity, 0.5, 1.0) * phaseMul.colorHeat +
+        phaseHeatBias +
+        (bOut.paletteDrift ?? 0) * 0.38
       ))
       mainUniforms.uPaletteShift.value  += (targetShift - mainUniforms.uPaletteShift.value) * (1 - Math.exp(-dt / 0.28))
       // Sync particle shader palette
@@ -851,7 +1057,7 @@ export function useThreeScene(canvasRef) {
       pMat.uniforms.uEnergy.value        = controller.energy
       pMat.uniforms.uParticleEnergy.value = visualState.particleEnergy
       pMat.uniforms.uBeatPhase.value      = visualState.beatPhase
-      pMat.uniforms.uParticleDensity.value = smoothed.particleDensity
+      pMat.uniforms.uParticleDensity.value = Math.max(0, smoothed.particleDensity * phaseMul.spore)
       pMat.uniforms.uTreblePulse.value = treblePulse
       pMat.uniforms.uOnset.value = onset
       pMat.uniforms.uAudioBody.value = visualState.audioBody
@@ -875,15 +1081,19 @@ export function useThreeScene(canvasRef) {
         combinedBoost
       )
 
-      // State-driven trail decay: per-mode defaults blended with behavioral target
+      // State-driven trail decay: Slice 6 phases own the main target; user
+      // trailDecay remains a small bias and mode defaults keep subtle character.
       const modeDecayDefaults = [0.84, 0.84, 0.86, 0.90, 0.82]
       const modeDecay = modeDecayDefaults[mode] ?? 0.84
-      const userDecayOffset = smoothed.trailDecay - 0.84
-      const baseDecay = Math.max(0.70, Math.min(0.94, (bOut.trailDecay ?? modeDecay) + userDecayOffset))
+      const userDecayOffset = (smoothed.trailDecay - 0.84) * 0.35
+      const modeDecayOffset = (modeDecay - 0.84) * 0.15
+      const baseDecay = Math.max(0.70, Math.min(0.94, phaseMul.trailDecay + userDecayOffset + modeDecayOffset))
       const minDecay = Math.max(0.68, baseDecay - 0.06)
       const transitionClear = (1 - modeTransition) * 0.14
       const bassClear = mainUniforms.uBass.value * 0.035 * (1 - smoothstep05(journey.value, 0.45, 0.80) * 0.20)
-      const targetDecay = Math.max(0.68, Math.min(0.94, Math.max(minDecay, baseDecay - bassClear - transitionClear)))
+      const growthClear = growthWave.amp * 0.028
+      const silenceHold01 = Math.max(0, Math.min(1, silence)) * 0.025
+      const targetDecay = Math.max(0.68, Math.min(0.94, Math.max(minDecay, baseDecay - bassClear - growthClear - transitionClear + silenceHold01)))
       const trailTau = transitionClear > 0.01 ? 0.11 : 0.24
       smoothTrailDecay += (targetDecay - smoothTrailDecay) * (1 - Math.exp(-dt / trailTau))
       trailUniforms.uDecay.value = smoothTrailDecay
@@ -939,56 +1149,103 @@ export function useThreeScene(canvasRef) {
       const transitionSpawnGate = 0.62 + modeTransition * 0.38
       const calmSpawnGate = bOut.state === 'calm' ? 0.62 : 1
       const journeyGate = 0.55 + journey.value * 0.55
-      const spawnRate = hiVal * (1.15 + beatConfidence * 1.35 + visualState.audioDetail * 0.70) * density * livingGate * capacityGate * transitionSpawnGate * calmSpawnGate * journeyGate
+      const spawnRate = hiVal * (1.15 + beatConfidence * 1.35 + visualState.audioDetail * 0.70) * density * livingGate * capacityGate * transitionSpawnGate * calmSpawnGate * journeyGate * phaseMul.spore
       const particleThreshold = 0.13 + silenceHold * 0.06 + crowding * 0.08
+      if (density > 0.03 && growthWaveReleased && capacityGate > 0.14 && livingParticles < MAX_PARTICLES * 0.82) {
+        const growthCount = bOut.state === 'peak' ? 6 : bOut.state === 'build' ? 5 : 3
+        spawnGrowthWaveSpores(growthCount, growthWave.amp, mode, silence)
+      }
       if (density > 0.01 && hiVal > lastHi * 0.95 && hiVal > particleThreshold && livingGate > 0.22 && capacityGate > 0.04) {
         const wholeSpawns = Math.floor(spawnRate)
         const maxFrameSpawns = bOut.state === 'peak' && density > 1.15 && crowding < 0.55 ? 2 : 1
         const spawns = Math.min(maxFrameSpawns, wholeSpawns + (Math.random() < spawnRate - wholeSpawns ? 1 : 0))
         for (let s = 0; s < spawns; s++) {
-          const depth = 0.4 + Math.random() * 0.6
           const spawnMode = Math.random() < modeTransition ? mode : particleBlendFromMode
-          spawnParticleForMode(spawnMode, hiVal, depth, silence)
+          spawnParticleForMode(spawnMode, hiVal, null, silence)
         }
+      }
+
+      // Sustained audio keeps a tiny living ecosystem present between treble edges.
+      const sustainedSporeChance = dt *
+        Math.min(1.35, 0.18 + visualState.particleEnergy * 0.70 + journey.value * 0.38 + visualState.audioDetail * 0.28) *
+        density * capacityGate * transitionSpawnGate * phaseMul.spore * (1 - silence * 0.78)
+      if (density > 0.04 && crowding < 0.58 && capacityGate > 0.18 && Math.random() < sustainedSporeChance) {
+        const spawnMode = Math.random() < modeTransition ? mode : particleBlendFromMode
+        spawnParticleForMode(spawnMode, hiVal, null, silence)
+      }
+      const tunnelSporeChance = dt *
+        Math.min(0.88, 0.08 + visualState.audioMorph * 0.28 + tunnelPull * 0.34 + growthWave.amp * 0.40) *
+        density * capacityGate * transitionSpawnGate * phaseMul.spore * (1 - silence * 0.70)
+      if (density > 0.04 && bOut.state !== 'calm' && crowding < 0.70 && capacityGate > 0.12 && Math.random() < tunnelSporeChance) {
+        spawnParticleForMode(mode === 0 ? 2 : mode, hiVal + growthWave.amp * 0.25, particleDepth('mid', visualState.audioMorph), silence)
       }
       lastHi = hiVal
 
       // Ambient idle dust stays sparse so silence breathes without filling the blob.
-      if (density > 0.05 && bOut.state === 'calm' && crowding < 0.42 && Math.random() < dt * Math.min(0.42, 0.10 + density * 0.28) * (0.45 + livingGate * 0.35) * idleMotionGate) {
-        const idleDustVelocity = 0.00045 + livingGate * 0.00075
+      if (density > 0.05 && bOut.state === 'calm' && crowding < 0.42 && Math.random() < dt * Math.min(0.42, 0.10 + density * 0.28) * (0.45 + livingGate * 0.35) * idleMotionGate * phaseMul.spore) {
+        const d = particleDepth('far', visualState.audioDetail)
+        const idleDustVelocity = (0.00016 + livingGate * 0.00034) * depthScale(d)
         spawnParticle(
           Math.random() * 2 - 1, Math.random() * 2 - 1,
           (Math.random() - 0.5) * idleDustVelocity, (Math.random() - 0.5) * idleDustVelocity,
-          2.6 + Math.random() * 1.7, 0, 0.26 + Math.random() * 0.26)
+          3.6 + Math.random() * 2.4, 0, d)
+      }
+      const shimmerMoteChance = dt *
+        Math.min(0.76, visualState.audioDetail * 0.38 + treblePulse * 0.28 + growthWave.amp * 0.24) *
+        density * capacityGate * (1 - silence * 0.82)
+      if (density > 0.05 && crowding < 0.74 && capacityGate > 0.10 && Math.random() < shimmerMoteChance) {
+        const angle = Math.random() * Math.PI * 2
+        const d = particleDepth('near', visualState.audioDetail)
+        const parallax = depthScale(d)
+        const r = randRange(0.24, 0.58)
+        const spd = randRange(0.0007, 0.0022) * parallax * (0.45 + visualState.audioDetail)
+        spawnParticle(
+          Math.cos(angle) * r,
+          Math.sin(angle) * r,
+          -Math.sin(angle) * spd + (Math.random() - 0.5) * 0.0007,
+          Math.cos(angle) * spd + (Math.random() - 0.5) * 0.0007,
+          randRange(0.75, 1.45),
+          1,
+          d,
+        )
       }
 
-      // Blob-collision burst: spark particles ejected radially from blob surface
+      // Blob-collision burst: restrained near-surface embers, not an explosion.
       if (blobBurstPending > 0) {
-        const burstCapacity = Math.max(0, Math.floor(MAX_PARTICLES * 0.72) - countLivingParticles())
-        const count = Math.min(blobBurstPending, Math.max(0, Math.min(8, burstCapacity)))
+        const burstCapacity = Math.max(0, Math.floor(MAX_PARTICLES * 0.66) - countLivingParticles())
+        const count = Math.min(blobBurstPending, Math.max(0, Math.min(5, burstCapacity)))
         blobBurstPending = 0
         for (let s = 0; s < count; s++) {
           const angle = Math.random() * Math.PI * 2
-          const r     = 0.30 + Math.random() * 0.10
-          const spd   = 0.0038 + Math.random() * 0.0042
+          const d = particleDepth('near', visualState.audioPulse)
+          const parallax = depthScale(d)
+          const r = randRange(0.30, 0.43)
+          const spd = randRange(0.0018, 0.0037) * parallax * (1 - silence * 0.55)
           spawnParticle(
             Math.cos(angle) * r, Math.sin(angle) * r,
             Math.cos(angle) * spd, Math.sin(angle) * spd,
-            0.9 + Math.random() * 0.9, 1, 0.44 + Math.random() * 0.46)
+            1.0 + Math.random() * 0.9, 1, d)
         }
       }
 
-      // Update live particles: drag + force field coupling
+      // Update live particles: depth-aware ecosystem currents + force coupling.
       for (let i = 0; i < MAX_PARTICLES; i++) {
         if (ages[i] < lives[i]) {
           ages[i] += dt
           const ageNorm = Math.min(1, ages[i] / Math.max(lives[i], 0.001))
           const type = ptypes[i]
+          const pDepth = clamp01(pdepths[i])
+          const parallax = depthScale(pDepth)
+          const farWeight = 1 - smoothstep05(pDepth, 0.34, 0.62)
+          const nearWeight = smoothstep05(pDepth, 0.68, 0.92)
+          const midWeight = Math.max(0, 1 - farWeight - nearWeight * 0.55)
           const modeRadial = visualState.modeBlend.x
           const modeVortex = visualState.modeBlend.y
           const modeCollapse = visualState.modeBlend.z
           const modeOrbit = visualState.modeBlend.w
-          const drag = 0.992 - modeCollapse * 0.004 + (1 - livingGate) * 0.003
+          const accelGate = clamp01((1 - silence * 0.86) * idleMotionGate)
+          const shimmerGate = clamp01(accelGate * (0.32 + nearWeight * 0.68))
+          const drag = 0.986 + farWeight * 0.009 + midWeight * 0.005 - modeCollapse * 0.003 - nearWeight * 0.002
           velocities[i].x *= drag
           velocities[i].y *= drag
           // Sample force field: particles flow with the same forces as the shader
@@ -1002,13 +1259,14 @@ export function useThreeScene(canvasRef) {
             const falloff = Math.exp(-d2 / Math.max(r2, 0.0001))
             const d = Math.sqrt(d2) || 1
             const sign = f.strength > 0 ? 1 : -1
-            velocities[i].x += falloff * sign * (dx / d) * Math.abs(f.strength) * (1 - f.age) * 0.0003
-            velocities[i].y += falloff * sign * (dy / d) * Math.abs(f.strength) * (1 - f.age) * 0.0003
+            const forceLift = (0.28 + parallax * 0.72) * (0.18 + accelGate * 0.82)
+            velocities[i].x += falloff * sign * (dx / d) * Math.abs(f.strength) * (1 - f.age) * 0.00018 * forceLift
+            velocities[i].y += falloff * sign * (dy / d) * Math.abs(f.strength) * (1 - f.age) * 0.00018 * forceLift
           }
           // Curl noise: divergence-free field adds drift that matches the blob's flow
           const curlScale = 1.55 + modeRadial * 0.35 + modeVortex * 0.55 + modeOrbit * 0.30
-          const curl = curlNoise(px * curlScale, py * curlScale, elapsed + type * 7.0)
-          const curlStrength = 0.00009 * livingGate * (1 + visualState.audioMorph * 1.5 + visualState.audioTurbulence * 1.4 + smoothMidHi * 0.9)
+          const curl = curlNoise(px * curlScale + pDepth * 1.7, py * curlScale - pDepth * 1.3, elapsed + type * 7.0)
+          const curlStrength = 0.000045 * (0.18 + accelGate * 0.82) * (farWeight * 0.40 + midWeight * 1.05 + nearWeight * 0.78) * (1 + visualState.audioMorph * 1.7 + visualState.audioTurbulence * 1.1 + smoothMidHi * 1.05)
           velocities[i].x += curl.x * curlStrength
           velocities[i].y += curl.y * curlStrength
           const d = Math.sqrt(px * px + py * py) || 1
@@ -1016,21 +1274,40 @@ export function useThreeScene(canvasRef) {
           const tangentY = px / d
           const radialX = px / d
           const radialY = py / d
-          const radialKick = (bassPulse * 0.00016 + onset * 0.00006 + visualState.audioPulse * 0.00008) * livingGate
+          const slowCurrent = (0.000010 + calmMotion * 0.000018) * (farWeight * 1.25 + midWeight * 0.45) * (1 - nearWeight * 0.35)
+          velocities[i].x += curl.x * slowCurrent
+          velocities[i].y += (curl.y + 0.16) * slowCurrent
+          const radialKick = (bassPulse * 0.000075 + onset * 0.000022 + visualState.audioPulse * 0.000045) * shimmerGate * (0.52 + parallax * 0.48)
           if (radialKick > 0.0) {
-            const collapseSign = modeCollapse > 0.45 && type > 1.5 ? -0.55 : 1
+            const collapseSign = modeCollapse > 0.45 && type > 1.5 ? -0.65 : 1
             velocities[i].x += radialX * radialKick * collapseSign
             velocities[i].y += radialY * radialKick * collapseSign
           }
-          const vortexDrift = modeVortex * (0.00008 + visualState.audioMorph * 0.00014) * livingGate
-          const orbitLock = modeOrbit * (0.00006 + visualState.audioDetail * 0.00010) * (1 - ageNorm * 0.45) * livingGate
-          const radialBreath = modeRadial * Math.sin(elapsed * 1.6 + pdepths[i] * 5.0) * 0.00008 * livingGate
-          const collapsePull = modeCollapse * (0.00010 + visualState.audioBody * 0.00018) * (type > 1.5 ? 1.25 : 0.75) * livingGate
-          velocities[i].x += tangentX * (vortexDrift + orbitLock) + radialX * radialBreath - radialX * collapsePull
-          velocities[i].y += tangentY * (vortexDrift + orbitLock) + radialY * radialBreath - radialY * collapsePull
+          const vortexDrift = modeVortex * (0.000050 + visualState.audioMorph * 0.000095 + visualState.audioTurbulence * 0.000035) * shimmerGate * (midWeight + nearWeight * 0.75)
+          const vortexTighten = modeVortex * (0.000025 + visualState.audioMorph * 0.000050) * shimmerGate * (midWeight + nearWeight * 0.80)
+          const orbitLock = modeOrbit * (0.000035 + visualState.audioDetail * 0.000065) * (1 - ageNorm * 0.45) * shimmerGate * (farWeight * 0.45 + midWeight * 0.80 + nearWeight * 0.55)
+          const radialBreath = modeRadial * Math.sin(elapsed * 1.4 + pDepth * 6.0) * 0.000050 * (0.22 + accelGate * 0.78) * (farWeight * 0.50 + midWeight + nearWeight * 0.55)
+          const collapsePull = modeCollapse * (0.000070 + visualState.audioBody * 0.000125) * (type > 1.5 ? 1.20 : 0.70) * (0.15 + accelGate * 0.85)
+          const fluidTide = (1 - Math.max(modeRadial, modeVortex, modeCollapse, modeOrbit)) * Math.sin(elapsed * 0.55 + pDepth * 8.0) * 0.000024 * (farWeight + midWeight * 0.45) * (0.35 + calmMotion * 0.65)
+          velocities[i].x += tangentX * (vortexDrift + orbitLock + fluidTide) + radialX * radialBreath - radialX * (collapsePull + vortexTighten)
+          velocities[i].y += tangentY * (vortexDrift + orbitLock + fluidTide) + radialY * radialBreath - radialY * (collapsePull + vortexTighten)
+          const speedLimit = 0.0014 + nearWeight * 0.0020 + shimmerGate * 0.0014 + midWeight * 0.0007
+          const speed = Math.sqrt(velocities[i].x * velocities[i].x + velocities[i].y * velocities[i].y)
+          if (speed > speedLimit) {
+            const slow = speedLimit / speed
+            velocities[i].x *= slow
+            velocities[i].y *= slow
+          }
 
           positions[i * 3]     += velocities[i].x
           positions[i * 3 + 1] += velocities[i].y
+          const edge = Math.max(Math.abs(positions[i * 3]), Math.abs(positions[i * 3 + 1]))
+          if (edge > 1.18) {
+            positions[i * 3] *= 0.985
+            positions[i * 3 + 1] *= 0.985
+            velocities[i].x *= -0.15
+            velocities[i].y *= -0.15
+          }
         }
       }
       pGeo.attributes.position.needsUpdate = true
@@ -1071,14 +1348,11 @@ export function useThreeScene(canvasRef) {
 
         if (!discoveries.includes('rapidClick') && detectRapidClick(nowMs)) {
           addDiscovery('rapidClick')
-          // Distortion storm: 5 rapid pulses from center
-          for (let k = 0; k < 5; k++) {
-            setTimeout(() => spawnGestureForce(
-              (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.2,
-              0.75
-            ), k * 40)
-          }
-          mainUniforms.uDistortionSpike.value = Math.min(1.2, mainUniforms.uDistortionSpike.value + 1.0)
+          // Single soft growth bloom at center + small color spike. Replaces
+          // the prior 5-pulse 40ms storm that read as glitchy strobe.
+          spawnGestureForce(0, 0, 0.45)
+          mainUniforms.uColorSpike.value = Math.min(1.0, mainUniforms.uColorSpike.value + 0.35)
+          mainUniforms.uDistortionSpike.value = Math.min(0.4, mainUniforms.uDistortionSpike.value + 0.4)
           controller.injectEnergy(0.18)
         }
 
