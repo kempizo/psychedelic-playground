@@ -253,6 +253,85 @@ vec3 deepColor(float t, vec3 anchor) {
   return zoneColor(t, anchor, 0.62, 1.18) * 0.42;
 }
 
+// ── Mandelbrot-inspired utility layer ────────────────────────────────────────
+// Procedural field only: sampled after hit/miss is known, never in raymarch.
+#define MANDEL_MAX_ITER 42
+
+vec2 complexSquare(vec2 z) {
+  return vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y);
+}
+
+float safeLog2(float x) {
+  return log(max(x, 1e-6)) / log(2.0);
+}
+
+mat2 rot2(float a) {
+  float s = sin(a), c = cos(a);
+  return mat2(c, -s, s, c);
+}
+
+vec3 mandelPalette(float t, float heat) {
+  vec3 cold = palette(t + heat * 0.035);
+  vec3 hot = zoneColor(t + 0.24 + heat * 0.08, vec3(0.58, 1.00, 0.14), 0.44, 1.34);
+  vec3 violet = zoneColor(t + 0.58, vec3(0.85, 0.24, 1.00), 0.34, 1.26);
+  return mix(mix(cold, hot, heat * 0.55), violet, 0.18 + heat * 0.14);
+}
+
+vec4 mandelbrotField(vec2 uv, float time, float zoom, float audioMorph, float audioDetail, float audioPulse) {
+  vec2 center = vec2(-0.62, 0.36);
+  center += 0.035 * vec2(
+    sin(time * 0.071 + audioMorph * 1.7),
+    cos(time * 0.063 + audioMorph * 1.3)
+  );
+
+  vec2 c = center + uv * max(0.35, zoom);
+  vec2 z = vec2(0.0);
+  float iter = float(MANDEL_MAX_ITER);
+  float escaped = 0.0;
+  float trapLine = 10.0;
+  float trapRing = 10.0;
+  float trapPoint = 10.0;
+  float r2 = 0.0;
+
+  for (int i = 0; i < MANDEL_MAX_ITER; i++) {
+    z = complexSquare(z) + c;
+    r2 = dot(z, z);
+
+    float lineD = abs(z.x * 0.75 + z.y * 0.35);
+    trapLine = min(trapLine, lineD);
+
+    float ringRadius = mix(0.18, 0.36, 0.5 + 0.5 * sin(time * 0.20 + audioMorph));
+    float ringD = abs(length(z) - ringRadius);
+    trapRing = min(trapRing, ringD);
+
+    vec2 trapP = 0.22 * vec2(sin(time * 0.17), cos(time * 0.13));
+    trapPoint = min(trapPoint, length(z - trapP));
+
+    if (r2 > 4.0 && escaped < 0.5) {
+      iter = float(i);
+      escaped = 1.0;
+      break;
+    }
+  }
+
+  float smoothIter = iter;
+  if (escaped > 0.5) {
+    float logZn = 0.5 * log(max(r2, 1e-6));
+    float nu = safeLog2(logZn / log(2.0));
+    smoothIter = iter + 1.0 - nu;
+  }
+
+  float normIter = clamp(smoothIter / float(MANDEL_MAX_ITER), 0.0, 1.0);
+  float lineMask = 1.0 - smoothstep(0.004, 0.045 + audioDetail * 0.025, trapLine);
+  float ringMask = 1.0 - smoothstep(0.004, 0.035 + audioDetail * 0.020, trapRing);
+  float pointMask = 1.0 - smoothstep(0.004, 0.030 + audioPulse * 0.020, trapPoint);
+  float boundary = smoothstep(0.18, 0.95, normIter) * escaped;
+  float inside = 1.0 - escaped;
+  float trapCombined = clamp(lineMask * 0.55 + ringMask * 0.35 + pointMask * 0.45, 0.0, 1.0);
+
+  return vec4(normIter, trapCombined, boundary, inside);
+}
+
 // ── Tunnel / portal depth helpers (Stage 11) ──────────────────────────────────
 // Polar log-depth coordinates: r close to 0 → "infinity", r large → near rim.
 // Spiral applied as UV rotation BEFORE polar conversion so the atan branch cut
@@ -763,10 +842,37 @@ void main() {
     vec3 gillCol = mix(membraneCol, acidAccent, surfaceGills * (0.36 + gillOpen * 0.34));
     col += gillCol * surfaceGills * surfaceGillAmp;
 
+    vec2 mandelGillUV = vec2(
+      surfaceGillAngle / TAU,
+      p.y * 0.65 + length(p.xz) * 0.35
+    ) * 2.0 - 1.0;
+    mandelGillUV.x *= 1.6;
+    mandelGillUV += organicAsym * 0.035;
+    mandelGillUV = rot2(0.05 * sin(uTime * 0.09) + 0.10 * uAudioMorph) * mandelGillUV;
+    vec4 gillMandel = mandelbrotField(
+      mandelGillUV,
+      uTime * mix(0.54, 0.34, afterglowSoft) + 11.0,
+      mix(1.16, 0.68, clamp(uAudioMorph * 0.75 + gillOpen * 0.25, 0.0, 1.0)),
+      uAudioMorph,
+      uAudioDetail,
+      uAudioPulse + growthAmp * 0.35
+    );
+    float fractalGillZone = clamp(undersideZone * 0.82 + rimZone * (1.0 - capZone) * 0.34, 0.0, 1.0);
+    float fractalGillMask = surfaceGillMask * fractalGillZone * (0.18 + gillOpen * 0.72);
+    float fractalGillRibs = gillMandel.y * fractalGillMask;
+    float fractalVeinGlow = gillMandel.z * fractalGillMask;
+    float fractalDarkFold = gillMandel.w * fractalGillMask * (0.11 + undersideZone * 0.10);
+    vec3 mandelGillCol = mandelPalette(gillMandel.x + ct * 0.12 + layerCycle * 0.18, phaseHeat + uSpectralCentroid * 0.16);
+    col = mix(col, col * 0.62, clamp(fractalDarkFold, 0.0, 0.24));
+    col += mandelGillCol * fractalGillRibs * (0.040 + uAudioDetail * 0.066 + growthAmp * 0.030);
+    col += mix(coolMembrane, acidAccent, 0.34 + phaseHeat * 0.20) * fractalVeinGlow * (0.028 + uAudioPulse * 0.058 + uAudioBrightness * 0.024);
+
     // Mycelium on the core surface: cellularEdge sampled in surface space,
     // driven by morph/detail/turbulence audio signals. Reads as carved
     // biological vein texture, not an overlay.
-    vec2  coreVeinUV  = p.xy * (1.6 + uAudioMorph * 0.6) + vec2(tBase * 0.06, -tBase * 0.04);
+    const float CORE_VEIN_SCALE = 1.6;
+    const float CORE_VEIN_MORPH_SCALE = 0.6;
+    vec2  coreVeinUV  = fieldUV * (CORE_VEIN_SCALE + uAudioMorph * CORE_VEIN_MORPH_SCALE) + vec2(tBase * 0.06, -tBase * 0.04);
     float coreVein    = cellularEdge(coreVeinUV, tBase * 0.22 + uPalettePhase * 0.10);
     float coreVeinAmp = (0.034 + uAudioDetail * 0.090 + uAudioTurbulence * 0.046) * interiorDetailMask;
     col += mix(acidAccent, zoneColor(ct + 0.42, vec3(1.0, 0.78, 0.14), 0.50, 1.44), coreVein * phaseHeat) * coreVein * coreVeinAmp;
@@ -812,10 +918,13 @@ void main() {
   // Polar field composited behind the SDF surface. Reads as inward travel —
   // concentric depth rings + radial gill ridges + breathing pulse. Driven per
   // mode by uTunnelA / uTunnelB; gated by audio presence so silence stays calm.
-  // Uses stable screen UV (not the warped fieldUV) so the tunnel feels like a
-  // fixed depth field rather than crawling with the surface warp.
-  vec2 tunnelUV = (vUv * 2.0 - 1.0) * vec2(aspect, 1.0);
-  tunnelUV += organicAsym * 0.045 + uCamDrift * 0.12;
+  // Starts from stable screen UV, then lightly couples to the shared warped
+  // field basis before polar conversion so the seam-safe tunnel breathes with
+  // the organism without becoming another crawling surface warp.
+  vec2 rawTunnelUV = (vUv * 2.0 - 1.0) * vec2(aspect, 1.0);
+  rawTunnelUV += organicAsym * 0.045 + uCamDrift * 0.12;
+  const float COORD_COUPLE = 0.18;
+  vec2 tunnelUV = mix(rawTunnelUV, fieldUV, COORD_COUPLE);
   float tunDepth   = clamp(uTunnelA.x, 0.0, 1.0);
   float tunInward  = clamp(uTunnelA.y, 0.0, 1.0);
   float tunGills   = clamp(uTunnelA.z, 0.0, 1.0);
@@ -825,9 +934,28 @@ void main() {
   vec3 polarT = tunnelCoords(tunnelUV, tBase, tunInward, tunSpiral);
   float tunnelI = tunnelLayer(polarT, tunGills, tunBreath, tunSpiral, tBase);
   float portalI = portalBloom(polarT, tunPortal);
+  float portalMask = (1.0 - smoothstep(0.10, 0.78, polarT.x)) * smoothstep(0.015, 0.20, polarT.x);
+  vec2 mandelPortalUV = tunnelUV;
+  mandelPortalUV = rot2(tunSpiral * 1.2 + growthAmp * 0.6 + uTime * 0.04) * mandelPortalUV;
+  float mandelZoom = mix(1.34, 0.57, clamp(bloomEnergy * 0.72 + tunPortal * 0.18 + tunInward * 0.10, 0.0, 1.0));
+  mandelZoom *= 1.0 - 0.12 * uAudioBody;
+  vec4 portalMandel = mandelbrotField(
+    mandelPortalUV,
+    uTime * mix(0.50, 0.28, afterglowSoft),
+    mandelZoom,
+    uAudioMorph + tunSpiral * 0.35,
+    uAudioDetail,
+    uAudioPulse + tunPortal * 0.28 + growthAmp * 0.20
+  );
+  float portalStructureMask = portalMask * smoothstep(0.08, 0.64, tunnelI + portalI * 0.78);
+  float mandelPortal = portalStructureMask * (portalMandel.y * 0.58 + portalMandel.z * 0.38) * (0.26 + tunDepth * 0.56);
+  float mandelVoid = portalStructureMask * portalMandel.w * (0.070 + tunInward * 0.040);
+  vec3 mandelPortalTint = mandelPalette(portalMandel.x + polarT.z * 0.018 + layerCycle * 0.28, phaseHeat + uSpectralCentroid * 0.16);
   float tunnelGrowthWave = growthWaveBand(polarT.x, growthAge, growthAmp, 0.17) * (0.40 + tunGills * 0.60);
-  float wallCells = cellularEdge(tunnelUV * (1.8 + tunDepth * 1.1) + vec2(polarT.z * 0.055, -tBase * 0.045), tBase * 0.12 + polarT.z * 0.04);
-  tunnelI += wallCells * tunDepth * (0.035 + uAudioDetail * 0.035) + tunnelGrowthWave * 0.42;
+  const float WALL_CELL_SCALE = 1.8;
+  const float WALL_CELL_DEPTH_SCALE = 1.1;
+  float wallCells = cellularEdge(fieldUV * (WALL_CELL_SCALE + tunDepth * WALL_CELL_DEPTH_SCALE) + vec2(polarT.z * 0.055, -tBase * 0.045), tBase * 0.12 + polarT.z * 0.04);
+  tunnelI += wallCells * tunDepth * (0.035 + uAudioDetail * 0.035) + tunnelGrowthWave * 0.42 + portalMandel.y * portalStructureMask * tunDepth * (0.026 + uAudioDetail * 0.026);
   vec3 tunnelTint = zoneColor(0.34 + polarT.z * 0.020 + tunGills * 0.05 + layerCycle * 0.46, vec3(0.00, 0.74, 0.88), 0.46, 1.20);
   vec3 tunnelDeep = deepColor(0.70 + polarT.z * 0.018 + layerCycle * 0.22, vec3(0.00, 0.035, 0.075));
   tunnelTint = mix(tunnelDeep, tunnelTint, smoothstep(0.05, 0.92, tunnelI));
@@ -840,8 +968,10 @@ void main() {
   float tunnelBlobMask = hitDist > 0.0 ? (1.0 - silhouetteSoft * 0.48) * 0.70 : 1.0;
   float tunnelRimAtten = mix(1.0, 0.54, smoothstep(0.0, 1.55, length(tunnelUV)));
   float tunnelGain = 0.55 + tunDepth * 0.78;
+  col *= 1.0 - mandelVoid * tunnelBlobMask;
   col += tunnelTint * tunnelI * tunnelBlobMask * tunnelRimAtten * tunnelGain;
   col += portalTint * portalI * tunnelBlobMask * 0.66;
+  col += mandelPortalTint * mandelPortal * tunnelBlobMask * (0.060 + uAudioBrightness * 0.18 + phaseHeat * 0.070);
   col += waveTint * tunnelGrowthWave * tunnelBlobMask * tunnelRimAtten * (0.18 + phaseHeat * 0.10);
 
   // ── Organic atmosphere: low-amplitude vapor and depth, never a hard outline ─
