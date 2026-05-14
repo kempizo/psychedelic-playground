@@ -297,11 +297,12 @@ struct MandelTraps {
   float inside;
 };
 
-MandelTraps mandelbrotField(vec2 uv, float time, float zoom, float audioMorph, float audioDetail, float audioPulse) {
+MandelTraps mandelbrotField(vec2 uv, float time, float zoom, float audioMorph, float audioDetail, float audioPulse, float tunnelDepthPhase) {
   vec2 center = vec2(-0.62, 0.36);
-  center += 0.035 * vec2(
-    sin(time * 0.071 + audioMorph * 1.7),
-    cos(time * 0.063 + audioMorph * 1.3)
+  // Slow, shallow morph — anatomy evolves with tunnel depth phase, not twitchy morph.
+  center += 0.022 * vec2(
+    sin(time * 0.045 + audioMorph * 1.05 + tunnelDepthPhase * 0.22),
+    cos(time * 0.040 + audioMorph * 0.85 + tunnelDepthPhase * 0.19)
   );
 
   vec2 c = center + uv * max(0.35, zoom);
@@ -320,11 +321,11 @@ MandelTraps mandelbrotField(vec2 uv, float time, float zoom, float audioMorph, f
     float lineD = abs(z.x * 0.75 + z.y * 0.35);
     trapLine = min(trapLine, lineD);
 
-    float ringRadius = mix(0.18, 0.36, 0.5 + 0.5 * sin(time * 0.20 + audioMorph));
+    float ringRadius = mix(0.18, 0.36, 0.5 + 0.5 * sin(time * 0.13 + audioMorph * 0.55 + tunnelDepthPhase * 0.38));
     float ringD = abs(length(z) - ringRadius);
     trapRing = min(trapRing, ringD);
 
-    vec2 trapP = 0.22 * vec2(sin(time * 0.17), cos(time * 0.13));
+    vec2 trapP = 0.22 * vec2(sin(time * 0.11 + tunnelDepthPhase * 0.08), cos(time * 0.085 + tunnelDepthPhase * 0.06));
     trapPoint = min(trapPoint, length(z - trapP));
 
     if (r2 > 4.0 && escaped < 0.5) {
@@ -1052,12 +1053,13 @@ void main() {
       mix(1.16, 0.68, clamp(uAudioMorph * 0.75 + gillOpen * 0.25, 0.0, 1.0)),
       uAudioMorph,
       uAudioDetail,
-      uAudioPulse + growthAmp * 0.35
+      uAudioPulse + growthAmp * 0.35,
+      p.y * 0.38 + length(p.xz) * 0.24 + tBase * 0.05
     );
     float gillTrapCombined = clamp(gillMandel.lineMask * 0.55 + gillMandel.ringMask * 0.35 + gillMandel.pointMask * 0.45, 0.0, 1.0);
     float fractalGillZone = surfaceGillMask * undersideZone * rimZone * (0.38 + gillAnatomy * 0.62);
     float fractalGillAudioGate = mix(0.06, 1.0, audioPresence);
-    float fractalGillGrowthGate = smoothstep(0.02, 0.78, gillOpen * 0.64 + growthAmp * 0.40 + bloomEnergy * 0.22);
+    float fractalGillGrowthGate = smoothstep(0.02, 0.78, gillOpen * 0.64 + growthAmp * 0.40 + bloomEnergy * 0.12);
     float fractalGillMask = fractalGillZone * fractalGillAudioGate * fractalGillGrowthGate;
     float fractalGillRibs = gillTrapCombined * fractalGillMask;
     float fractalVeinGlow = gillMandel.boundary * fractalGillMask;
@@ -1170,17 +1172,26 @@ void main() {
   float tunnelI = tunnelLayer(polarTwarp, tunGills, tunBreath, tunSpiral, tBase);
   vec3 portalBounce = vec3(polarT.x * (1.0 - bassBounce * 0.115), polarT.y, polarT.z + bassBounce * 0.62);
   float portalI = portalBloom(portalBounce, tunPortal * (1.0 + bassBounce * 0.58));
+  float cent01 = clamp(uSpectralCentroid, 0.0, 1.0);
   vec2 mandelPortalUV = tunnelUV;
-  mandelPortalUV = rot2(tunSpiral * 1.2 + growthAmp * 0.6 + uTime * 0.04 + uAudioDriveA.z * 0.46) * mandelPortalUV;
-  float mandelZoom = mix(1.34, 0.57, clamp(bloomEnergy * 0.72 + tunPortal * 0.18 + tunInward * 0.10, 0.0, 1.0));
+  mandelPortalUV = rot2(tunSpiral * 1.2 + growthAmp * 0.6 + uTime * 0.028 + uAudioDriveA.z * 0.40) * mandelPortalUV;
+  // Zoom tracks timbre + tunnel depth more than raw bloom (anatomy, not loudness wallpaper).
+  float mandelZoomDrive = clamp(
+    bloomEnergy * 0.36 + tunPortal * 0.24 + tunInward * 0.16 + cent01 * 0.38,
+    0.0,
+    1.0
+  );
+  float mandelZoom = mix(1.34, 0.57, mandelZoomDrive);
   mandelZoom *= 1.0 - 0.12 * uAudioBody;
+  float mandelTunnelPhase = polarTwarp.z * 0.055 + forwardSlow * 0.038;
   MandelTraps portalMandel = mandelbrotField(
     mandelPortalUV,
     uTime * mix(0.50, 0.28, afterglowSoft),
     mandelZoom,
     uAudioMorph + tunSpiral * 0.35,
     uAudioDetail,
-    uAudioPulse + tunPortal * 0.28 + growthAmp * 0.20
+    uAudioPulse + tunPortal * 0.28 + growthAmp * 0.20,
+    mandelTunnelPhase
   );
   float portalAudioGate = mix(0.04, 1.0, audioPresence);
   float portalDepthGate = smoothstep(0.08, 0.78, tunDepth);
@@ -1193,6 +1204,17 @@ void main() {
                             * portalAudioGate
                             * (0.34 + anatomyThroatGate * 0.86);
 
+  // Single-sample anatomy scalars: route trap energy into masks (structure), not global tint.
+  float fractalMacroContour = clamp(
+    portalMandel.boundary * (0.55 + portalMandel.ringMask * 0.62)
+    + portalMandel.ringMask * portalMandel.boundary * 0.28,
+    0.0,
+    1.0
+  );
+  float fractalMesoLattice = clamp(portalMandel.lineMask * portalMandel.ringMask, 0.0, 1.0)
+    * (0.40 + anatomyThroatGate * 0.60);
+  float fractalMicroShimmer = portalMandel.pointMask;
+
   // Per-mode trap emphasis. Each Mandelbrot trap channel is routed to one
   // tunnel role; mDrift/mGills/.. were hoisted above for motion multipliers.
   float ribWeight      = 0.84 + mGills  * 1.16 + mSpiral * 0.54;
@@ -1200,14 +1222,16 @@ void main() {
   float latticeWeight  = 0.48 + mOrbit  * 1.05 + mGills  * 0.26;
   float membraneWeight = 0.54 + mPulse  * 0.92 + mDrift  * 0.62;
 
-  // Ribs: line trap → rib lattice corridors.
+  // Ribs: line trap → rib lattice corridors (contour-linked so ribs aren't a flat overlay).
   float mandelRibs     = portalStructureMask * portalMandel.lineMask  * ribWeight
                        * (0.32 + tunDepth * 0.60)
-                       * (1.0 + midSlide * 0.35 + fluxShimmer * 0.18);
+                       * (1.0 + midSlide * 0.35 + fluxShimmer * 0.18)
+                       * mix(0.78, 1.16, pow(max(fractalMacroContour, 1e-4), 0.82) * (0.28 + anatomyThroatGate * 0.72));
   // Rings: ring trap → concentric forward-depth bands.
   // bassPunch (A.y) compresses ring amplitude on kicks; Pulse mode adds a throat pump.
   float ringRibBreak = mix(0.32, 1.0, clamp(portalMandel.lineMask * 0.72 + tunnelI * 0.38, 0.0, 1.0));
   float ringDepthBreak = 0.34 + 0.66 * pow(0.5 + 0.5 * sin(polarTwarp.z * (2.55 + tunSpiral * 1.36) - polarT.y * (4.4 + tunGills * 4.4) + bassBounce * 1.65 + midSlide * 0.95), 3.10);
+  ringDepthBreak *= mix(0.90, 1.14, fractalMesoLattice);
   float ringStructureMask = ringRibBreak * ringDepthBreak * mix(0.62, 1.0, anatomyThroatGate);
   float mandelRings    = portalStructureMask * portalMandel.ringMask  * ringWeight
                        * (0.28 + tunInward * 0.50 + tunSpiral * 0.30)
@@ -1219,11 +1243,13 @@ void main() {
   float latticeGate    = smoothstep(0.18, 0.62, uAudioDriveA.w)
                        * smoothstep(0.04, 0.30, uAudioDriveB.y)
                        * (0.45 + anatomyThroatGate * 0.55);
-  float mandelLattice  = portalStructureMask * portalMandel.pointMask * latticeWeight * latticeGate;
-  // Membrane glow: smooth escape boundary → wide soft tunnel wall light.
+  float mandelLattice  = portalStructureMask * fractalMicroShimmer * latticeWeight * latticeGate
+                       * mix(0.32, 1.0, fractalMesoLattice * 0.52 + fractalMacroContour * 0.38);
+  // Membrane glow: boundary-driven — gated so it tracks tissue, not a full-frame sheet.
   float membraneContour = pow(portalMandel.boundary, 1.18);
+  float membraneAnatomyMask = mix(0.26, 1.0, pow(max(fractalMacroContour, 1e-4), 0.72) * (0.32 + anatomyThroatGate * 0.68));
   float mandelMembrane = portalStructureMask * membraneContour * membraneWeight
-                       * (0.32 + tunBreath * 0.58 + uAudioDriveB.x * 0.54);
+                       * (0.32 + tunBreath * 0.58 + uAudioDriveB.x * 0.40) * membraneAnatomyMask;
   // Void: dark interior, kept as multiplicative attenuation.
   float mandelVoid     = portalStructureMask * portalMandel.inside    * (0.050 + tunInward * 0.030);
   vec3 mandelPortalTint = mandelPalette(portalMandel.smoothIter + polarTwarp.z * 0.075 + forwardMid * 0.18 + layerCycle * 0.34 + uAudioDriveA.z * 0.28,
@@ -1266,7 +1292,7 @@ void main() {
   vec3 tunnelDeep = deepColor(0.70 + polarTwarp.z * 0.018 + layerCycle * 0.22, vec3(0.00, 0.035, 0.075));
   tunnelTint = mix(tunnelDeep, tunnelTint, smoothstep(0.05, 0.92, tunnelI));
   tunnelTint = saturateNeon(tunnelTint, 1.82) * 1.38;
-  mandelPortalTint = saturateNeon(mandelPortalTint, 1.58) * 1.28;
+  mandelPortalTint = saturateNeon(mandelPortalTint, 1.42) * 1.12;
   vec3 portalGold = zoneColor(0.76 + polarTwarp.z * 0.075 + layerCycle * 0.34, vec3(1.00, 0.84, 0.04), 0.70, 2.05);
   vec3 portalAcid = zoneColor(0.92 + polarTwarp.z * 0.065 + shimmerCycle * 0.050, vec3(0.38, 1.00, 0.08), 0.68, 2.12);
   vec3 portalTint = mix(portalGold, portalAcid, smoothstep(0.36, 0.90, phaseHeat + growthAmp * 0.30));
@@ -1281,9 +1307,9 @@ void main() {
   col *= 1.0 - mandelVoid * tunnelBlobMask * 0.72;
   col += tunnelTint * tunnelI * tunnelBlobMask * tunnelRimAtten * tunnelGain;
   col += portalTint * portalI * tunnelBlobMask * (0.62 + anatomyThroatGate * 0.68) * (1.0 + uAudioDriveA.y * 1.20) * (1.0 - uAudioDriveB.w * 0.36);
-  // Mandelbrot trap-routed tunnel color: membrane glow (wide), ribs (bright), rings (gold-shifted depth bands), lattice glints (sparse).
+  // Mandelbrot trap-routed tunnel color: membrane follows contour; ribs/rings stay depth-gated.
   col += mandelPortalTint * mandelMembrane * tunnelBlobMask
-       * (0.44 + uAudioDriveB.x * 0.66 + phaseHeat * 0.20);
+       * (0.26 + anatomyThroatGate * 0.44) * (0.32 + uAudioDriveB.x * 0.48 + phaseHeat * 0.14);
   col += mandelPortalTint * mandelRibs * tunnelBlobMask * tunnelRimAtten
        * (0.74 + tunDepth * 0.30 + uAudioDetail * 0.18 + uAudioDriveB.y * 0.50);
   col += mix(tunnelTint, portalGold, 0.32) * mandelRings * tunnelBlobMask * tunnelRimAtten
