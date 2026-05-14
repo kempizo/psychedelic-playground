@@ -468,6 +468,7 @@ export function useThreeScene(canvasRef) {
       laneFluxPulse: 0,
       laneMotionEnergy: 0,
       laneSilenceAmount: 0,
+      laneBassElastic: 0,
     }
     // uCamDrift accumulator: slowly integrates sub-bass, decays at 0.997/frame
     const camDrift = new THREE.Vector2(0, 0)
@@ -879,6 +880,37 @@ export function useThreeScene(canvasRef) {
       smoothAudio('laneMotionEnergy', motionEnergy,     0.12, 0.36)
       smoothAudio('laneSilenceAmount',silenceAmount,    0.16, 0.42)
 
+      const musicalPresence = clamp01(
+        rms * 2.6 +
+        predictedEnergy * 1.4 +
+        subBodyLane * 1.2 +
+        midMotionLane * 1.0 +
+        brightnessLane * 0.5 +
+        fluxPulse * 0.35
+      )
+      const lowLevelLift = smoothstep05(musicalPresence, 0.018, 0.12) *
+        (1 - smoothstep05(musicalPresence, 0.16, 0.42)) *
+        (1 - silenceAmount * 0.95)
+      const motionLaneGain = 1 + lowLevelLift * 1.55
+      const pulseGain = 1 + lowLevelLift * 1.05
+      const brightnessGain = 1 + lowLevelLift * 0.75
+      const visualSubBodyLane = clamp01(visualState.laneSubBody * motionLaneGain)
+      const bassElasticTarget = Math.pow(clamp01(
+        visualState.laneBassPunch * pulseGain +
+        beatPulse * 0.18 +
+        visualState.laneFluxPulse * 0.10
+      ), 0.78)
+      visualState.laneBassElastic += (bassElasticTarget - visualState.laneBassElastic) *
+        (1 - Math.exp(-dt / (bassElasticTarget > visualState.laneBassElastic ? 0.035 : 0.26)))
+      const visualBassPunchLane = clamp01(
+        visualState.laneBassPunch * pulseGain * 0.82 +
+        visualState.laneBassElastic * 0.52
+      )
+      const visualMidMotionLane = clamp01(visualState.laneMidMotion * motionLaneGain)
+      const visualBrightnessLane = clamp01(visualState.laneBrightness * brightnessGain)
+      const visualFluxPulse = clamp01(visualState.laneFluxPulse * pulseGain)
+      const visualMotionEnergy = clamp01(visualState.laneMotionEnergy * motionLaneGain)
+
       const coreTarget = Math.max(idleCoreFloor, Math.min(1, predictedEnergy * 0.48 + rms * 0.12 + subNL * 0.12 + subBodyLane * 0.22 + bassPunchLane * 0.16 + beatPulse * 0.08))
       const surfaceTarget = Math.min(1, lowMidNL * 0.16 + midNL * 0.24 + highMidNL * 0.10 + midMotionLane * 0.30 + predictedEnergy * 0.12 + fluxPulse * 0.08)
       const particleTarget = Math.min(1, predictedEnergy * 0.34 + highMidNL * 0.10 + trebleNL * 0.12 + highSparkleLane * 0.28 + treblePulse * 0.12 + beatPulse * 0.18) * idleMotionGate * (1 - silenceAmount * 0.18)
@@ -1009,10 +1041,10 @@ export function useThreeScene(canvasRef) {
       // Stage 11 — tunnel / portal depth controls. All locals stay in render
       // loop; uTunnelA/B are internal-only shader uniforms (no UI / store / URL).
       // Slice D: per-mode target table for uTunnelA/B. Audio lanes clamped before use.
-      const sbC  = Math.min(subBodyLane,  0.8)   // clamped sub-body
-      const bpC  = Math.min(bassPunchLane, 0.6)  // clamped bass punch
-      const fpC  = Math.min(fluxPulse,    0.5)   // clamped flux pulse
-      const mmC  = Math.min(midMotionLane, 0.7)  // clamped mid motion
+      const sbC  = Math.min(visualSubBodyLane,   0.8) // clamped sub-body
+      const bpC  = Math.min(visualBassPunchLane, 0.6) // clamped bass punch
+      const fpC  = Math.min(visualFluxPulse,     0.5) // clamped flux pulse
+      const mmC  = Math.min(visualMidMotionLane, 0.7) // clamped mid motion
 
       // Per-mode targets: [inward(y), gillDepth(z), spiral(w), breathAmp(Bx), portalBloom(By)]
       // Blended through modeBlend weights (same tau as engineLerp).
@@ -1024,21 +1056,22 @@ export function useThreeScene(canvasRef) {
       const mOrbit   = mb.w
 
       const inwardTarget   = mDrift  * 0.55
-                           + mGills  * 0.45
-                           + mSpiral * 0.50
-                           + mPulse  * Math.min(0.75 * sbC + 0.75 * (1 - sbC) * 0.55, 0.75)
+                           + mGills  * (0.45 + bpC * 0.20)
+                           + mSpiral * (0.50 + mmC * 0.15)
+                           + mPulse  * Math.min(0.80 * sbC + 0.80 * (1 - sbC) * 0.55, 0.80)
                            + mOrbit  * 0.40
       const gillTarget     = mDrift  * 0.30
-                           + mGills  * 0.85
+                           + mGills  * (0.85 + mmC * 0.15)
                            + mSpiral * 0.45
-                           + mPulse  * 0.45
+                           + mPulse  * (0.45 + bpC * 0.15)
                            + mOrbit  * 0.40
       const spiralTarget   = mDrift  * 0.10
                            + mGills  * 0.15
                            + mSpiral * Math.min(0.75 * mmC + 0.75 * (1 - mmC) * 0.40, 0.75)
                            + mPulse  * 0.20
                            + mOrbit  * 0.30
-      const breathTarget   = mDrift  * (0.50 * sbC)
+      const breathTarget   = 0.28    // silence floor — keeps tunnel rings alive
+                           + mDrift  * (0.50 * sbC)
                            + mGills  * 0.40
                            + mSpiral * 0.45
                            + mPulse  * Math.min(0.80 * (sbC + bpC * 0.5), 0.80)
@@ -1051,7 +1084,7 @@ export function useThreeScene(canvasRef) {
 
       const tunnelIdleFloor = 0.28 + calmMotion * 0.14
       const phaseDepthLift = Math.max(0, phaseMul.portal - 0.30) * 0.10 + Math.max(0, phaseMul.tunnelPull - 0.72) * 0.06
-      const tunnelDepth = clamp01(tunnelIdleFloor + audioPresence * 0.45 + subBodyLane * 0.22 + journeyIntensity * 0.16 + phaseDepthLift)
+      const tunnelDepth = clamp01(tunnelIdleFloor + audioPresence * 0.45 + visualSubBodyLane * 0.22 + journeyIntensity * 0.16 + phaseDepthLift)
       const tunnelPortalTarget = clamp01(((onsetAccent * audioPresence + bpC * audioPresence * 0.36 + fpC * audioPresence * 0.24) * phaseMul.portal + portalTarget) * 0.5)
       tunnelATarget.set(tunnelDepth, clamp01(inwardTarget), clamp01(gillTarget), clamp01(spiralTarget))
       visualState.tunnelA.lerp(tunnelATarget, engineLerp)
@@ -1176,15 +1209,15 @@ export function useThreeScene(canvasRef) {
       mainUniforms.uAudioTurbulence.value = visualState.audioTurbulence
       // Pack direct musical lanes into vec4 uniforms — primary authority for tunnel/throat/vein
       mainUniforms.uAudioDriveA.value.set(
-        visualState.laneSubBody,
-        visualState.laneBassPunch,
-        visualState.laneMidMotion,
+        visualSubBodyLane,
+        visualBassPunchLane,
+        visualMidMotionLane,
         visualState.laneHighSparkle,
       )
       mainUniforms.uAudioDriveB.value.set(
-        visualState.laneBrightness,
-        visualState.laneFluxPulse,
-        visualState.laneMotionEnergy,
+        visualBrightnessLane,
+        visualFluxPulse,
+        visualMotionEnergy,
         visualState.laneSilenceAmount,
       )
 
@@ -1317,7 +1350,7 @@ export function useThreeScene(canvasRef) {
       const silenceCalm = 1 - silenceAmount * 0.35
       // motionEnergy boosts spawn rate; silenceAmount gates down further
       const motionEnergyLane = visualState.laneMotionEnergy
-      const spawnRate = hiVal * (1.15 + beatConfidence * 1.35 + visualState.audioDetail * 0.70 + motionEnergyLane * 0.50) * density * livingGate * capacityGate * transitionSpawnGate * calmSpawnGate * journeyGate * phaseMul.spore * silenceCalm
+      const spawnRate = hiVal * (1.15 + beatConfidence * 1.35 + visualState.audioDetail * 0.70 + motionEnergyLane * 0.85) * density * livingGate * capacityGate * transitionSpawnGate * calmSpawnGate * journeyGate * phaseMul.spore * silenceCalm
       const particleThreshold = 0.13 + silenceHold * 0.06 + crowding * 0.08
       if (density > 0.03 && growthWaveReleased && capacityGate > 0.14 && livingParticles < MAX_PARTICLES * 0.82) {
         const growthCount = bOut.state === 'peak' ? 6 : bOut.state === 'build' ? 5 : 3

@@ -17,6 +17,7 @@ uniform float uAudioBody;
 uniform float uAudioDetail;
 uniform float uAudioTurbulence;
 uniform float uSilence;
+uniform float uMandelPhase;
 
 varying float vAlpha;
 varying vec3  vColor;
@@ -58,13 +59,16 @@ void main() {
   float typeOffset = aType < 0.5 ? 0.62
                    : aType < 1.5 ? 0.42 + uEnergy * 0.12
                                  : 0.82 + uAudioDetail * 0.08;
-  float microCycle = uBeatPhase * 0.10 + uTreblePulse * 0.16 + uAudioTurbulence * 0.08;
+  float microCycle = uBeatPhase * 0.10 + uTreblePulse * 0.16 + uAudioTurbulence * 0.08 + uMandelPhase * 0.22;
   float t = position.x * 0.12 + position.y * 0.08 + uParticleEnergy * 0.20 + typeOffset + microCycle;
   vec3 pal = fieldPalette(t);
   vec3 dustCol = mix(pal, vec3(0.18, 0.95, 0.78), 0.48);
   vec3 emberCol = mix(pal, vec3(1.00, 0.62, 0.12), 0.58);
   vec3 sporeCol = mix(pal, vec3(0.62, 1.00, 0.16), 0.46);
   vec3 typedCol = aType < 0.5 ? dustCol : aType < 1.5 ? emberCol : sporeCol;
+  vec3 fractalSporeCol = mix(fieldPalette(t + 0.27 + uMandelPhase * 0.35), vec3(0.30, 1.00, 0.92), 0.38);
+  float fractalTint = clamp(uAudioDetail * 0.22 + uTreblePulse * 0.18 + uOnset * 0.14 + nearPollen * 0.16, 0.0, 0.36);
+  typedCol = mix(typedCol, fractalSporeCol, fractalTint);
   typedCol = mix(typedCol, vec3(0.92, 0.96, 1.0), nearPollen * uTreblePulse * 0.18);
   vColor = saturateParticle(typedCol, 1.20 + uParticleEnergy * 0.16 + uTreblePulse * 0.12);
 

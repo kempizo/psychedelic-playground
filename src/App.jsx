@@ -10,6 +10,7 @@ import DiscoveryToast from './components/DiscoveryToast'
 import { useURLState } from './hooks/useURLState'
 import { stopMic } from './audio/mic'
 import { stopFile } from './audio/fileAudio'
+import { stopDisplayAudio } from './audio/displayAudio'
 import useStore from './store/useStore'
 
 export default function App() {
@@ -23,6 +24,7 @@ export default function App() {
   const handleReset = () => {
     stopMic()
     stopFile()
+    stopDisplayAudio()
     useStore.getState().setIsPlaying(false)
     useStore.getState().setAudioSource(null)
     setStarted(false)
@@ -70,7 +72,7 @@ export default function App() {
     >
       <VisualCanvas ref={canvasRef} />
 
-      {!started && <LandingScreen onStarted={() => setStarted(true)} />}
+      {!started && <LandingScreen onStarted={() => setStarted(true)} onSourceEnded={handleReset} />}
 
       {started && (
         <>

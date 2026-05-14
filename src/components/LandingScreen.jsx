@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import AudioInput from './AudioInput'
 
-export default function LandingScreen({ onStarted }) {
+export default function LandingScreen({ onStarted, onSourceEnded }) {
   const [fading, setFading] = useState(false)
 
   const handleStarted = () => {
@@ -35,7 +35,7 @@ export default function LandingScreen({ onStarted }) {
           </p>
         </div>
 
-        <AudioInput onStarted={handleStarted} />
+        <AudioInput onStarted={handleStarted} onSourceEnded={onSourceEnded} />
 
         <p
           className="text-xs font-mono max-w-xs"

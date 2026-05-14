@@ -37,6 +37,14 @@ const useStore = create((set, get) => ({
     spectralCentroid: 0,
     spectralFlux: 0,
     silence: 1,
+    subBody: 0,
+    bassPunch: 0,
+    midMotion: 0,
+    highSparkle: 0,
+    brightness: 0,
+    fluxPulse: 0,
+    silenceAmount: 1,
+    motionEnergy: 0,
   },
 
   // UI controls

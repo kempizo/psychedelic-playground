@@ -11,7 +11,10 @@ const CONTROLS = [
   { key: 'particleDensity', label: 'Particle Density', min: 0, max: 2, step: 0.01 },
 ]
 
-const MODES = ['Fluid', 'Radial', 'Vortex', 'Collapse', 'Orbit']
+// Display labels for the five journey-field variations. Internal mode IDs
+// (0–4) are unchanged so presets and share URLs from before the rework still
+// load to the same visual mode.
+const MODES = ['Drift', 'Gills', 'Spiral', 'Pulse', 'Orbit']
 
 export default function ControlPanel({ onReset, isHidden }) {
   const { speed, intensity, colorShift, chaos, mode, trailDecay, cameraDistance, procIntensity, particleDensity, setControl, resetControls } = useStore()

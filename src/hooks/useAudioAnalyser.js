@@ -3,6 +3,37 @@ import { getAnalyser } from '../audio/analyser'
 import { extractBands } from '../audio/bands'
 import useStore from '../store/useStore'
 
+const LANE_STAT_KEYS = [
+  'rms',
+  'subBody',
+  'bassPunch',
+  'midMotion',
+  'brightness',
+  'fluxPulse',
+  'motionEnergy',
+  'silenceAmount',
+]
+
+function createLaneStats() {
+  return Object.fromEntries(LANE_STAT_KEYS.map((key) => [
+    key,
+    { last: 0, min: 0, max: 0, avg: 0, samples: 0 },
+  ]))
+}
+
+function updateLaneStats(stats, lanes) {
+  for (const key of LANE_STAT_KEYS) {
+    const value = Math.max(0, Math.min(1, lanes[key] ?? 0))
+    const entry = stats[key]
+    const samples = entry.samples
+    entry.last = value
+    entry.min = samples === 0 ? value : Math.min(entry.min, value)
+    entry.max = samples === 0 ? value : Math.max(entry.max, value)
+    entry.avg = samples === 0 ? value : entry.avg + (value - entry.avg) / (samples + 1)
+    entry.samples = samples + 1
+  }
+}
+
 export function useAudioAnalyser() {
   const rafRef = useRef(null)
   const smoothed = useRef({
@@ -27,6 +58,17 @@ export function useAudioAnalyser() {
     spectralCentroid: 0,
     spectralFlux: 0,
     silence: 1,
+    subBody: 0,
+    bassPunch: 0,
+    midMotion: 0,
+    highSparkle: 0,
+    brightness: 0,
+    fluxPulse: 0,
+    silenceAmount: 1,
+    motionEnergy: 0,
+  })
+  const pulseState = useRef({
+    fluxCooldown: 0,
   })
   const beatState = useRef({
     lastTime: 0,
@@ -48,6 +90,7 @@ export function useAudioAnalyser() {
   const scratchRef = useRef(null)
   const waveformRef = useRef(null)
   const previousFftRef = useRef(null)
+  const laneStatsRef = useRef(null)
 
   useEffect(() => {
     const SILENCE_FLOOR = 0.006
@@ -193,7 +236,73 @@ export function useAudioAnalyser() {
         s.beatConfidence = b.confidence
         s.energy = energy
         s.spectralFlux *= quietDamp
+
+        // --- Derived musical lanes (named attack/release-smoothed) ---
+        const clamp01 = (v) => v < 0 ? 0 : v > 1 ? 1 : v
+        const quietDampSq = quietDamp * quietDamp
+
+        const subBodyTarget = clamp01(s.sub * 0.6 + s.bass * 0.4)
+        s.subBody = ema(s.subBody, subBodyTarget, 0.25, 0.10)
+
+        const bassExcess = clamp01(Math.max(0, (s.bass - a.bass * 0.92) / Math.max(a.bass, 0.025)))
+        const bassPunchTarget = Math.pow(
+          clamp01(s.bassPulse * 0.82 + bassExcess * 0.38 + s.onset * 0.10),
+          0.72,
+        ) * quietDamp
+        s.bassPunch = ema(s.bassPunch, bassPunchTarget, 0.85, 0.32)
+
+        const midMotionTarget = Math.pow(
+          clamp01(s.lowMid * 0.40 + s.mid * 0.62 + s.midPulse * 0.34 + s.bassPulse * 0.08),
+          0.86,
+        )
+        s.midMotion = ema(s.midMotion, midMotionTarget, 0.55, 0.40)
+
+        const highSparkleTarget = clamp01(
+          (s.highMid * 0.45 + s.treble * 0.55 + s.treblePulse * 0.25 - 0.08) * quietDampSq
+        )
+        s.highSparkle = ema(s.highSparkle, highSparkleTarget, 0.88, 0.45)
+
+        const brightnessTarget = clamp01(
+          s.spectralCentroid * 0.55 + (s.treble * 0.25 + s.highMid * 0.20) * 0.45
+        )
+        s.brightness = ema(s.brightness, brightnessTarget, 0.28, 0.18)
+
+        // fluxPulse: one-shot gate with cooldown so it cannot strobe each frame.
+        const pst = pulseState.current
+        pst.fluxCooldown = Math.max(0, pst.fluxCooldown - dt)
+        const fluxArmed = pst.fluxCooldown <= 0 && energy > 0.06 && !silence.isSilent
+        const fluxRaw = fluxArmed ? Math.min(1, s.spectralFlux * 1.4) : 0
+        if (fluxArmed && fluxRaw > 0.45) pst.fluxCooldown = 0.18
+        s.fluxPulse = ema(s.fluxPulse, fluxRaw * quietDamp, 0.82, 0.30)
+
+        // silenceAmount: clarity alias of s.silence (same smoothing already applied above).
+        s.silenceAmount = s.silence
+
+        const motionEnergyTarget = clamp01(
+          s.midPulse * 0.46 +
+          s.bassPulse * 0.28 +
+          s.treblePulse * 0.22 +
+          s.spectralFlux * 0.42 +
+          s.onset * 0.24 +
+          s.midMotion * 0.18
+        )
+        s.motionEnergy = ema(s.motionEnergy, motionEnergyTarget, 0.45, 0.30)
+
+        // Extra anti-click during deep silence: stack one more quietDamp on transient lanes.
+        if (silence.isSilent || energy < 0.022) {
+          s.onset *= quietDamp
+          s.spectralFlux *= quietDamp
+        }
+
         b.lastEnergy = energy
+
+        if (import.meta.env.DEV && typeof window !== 'undefined') {
+          if (!laneStatsRef.current) {
+            laneStatsRef.current = createLaneStats()
+            window.__AUDIO_LANE_STATS__ = laneStatsRef.current
+          }
+          updateLaneStats(laneStatsRef.current, s)
+        }
 
         // Write directly — bypasses React re-render
         useStore.getState().setAudioData({ ...s })
